@@ -37,6 +37,114 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 // =======================
+// HAND-DRIVEN PARTICLES (YOUR HAND = PARTICLES)
+// =======================
+const particleCount = 500;
+const geometry = new THREE.BufferGeometry();
+const positions = new Float32Array(particleCount * 3);
+
+for (let i = 0; i < particleCount * 3; i++) positions[i] = 0;
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+const material = new THREE.PointsMaterial({
+  color: 0x00eaff,
+  size: 0.04,
+  transparent: true,
+  opacity: 0.9
+});
+
+const handParticles = new THREE.Points(geometry, material);
+scene.add(handParticles);
+
+
+// =======================
+// HAND TRACKING (HAND CONTROLS EVERYTHING)
+// =======================
+let scaleTarget = 1;
+let rotationX = 0;
+let rotationY = 0;
+let handOpenFactor = 0; // controls size
+ // sphere | heart | ring
+
+const hands = new Hands({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
+
+hands.onResults(results => {
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
+
+  const lm = results.multiHandLandmarks[0];
+
+  // HAND OPEN = SCALE (distance index tip to wrist)
+  const wrist = lm[0];
+  const indexTip = lm[8];
+  const dx = indexTip.x - wrist.x;
+  const dy = indexTip.y - wrist.y;
+  handOpenFactor = Math.sqrt(dx * dx + dy * dy);
+  scaleTarget = THREE.MathUtils.clamp(handOpenFactor * 4, 0.8, 3);
+
+  // ROTATION FROM HAND MOVEMENT
+  rotationY = (indexTip.x - 0.5) * 4;
+  rotationX = (indexTip.y - 0.5) * 4;
+
+  // MAP HAND LANDMARKS INTO PARTICLES
+  const pos = geometry.attributes.position.array;
+  for (let i = 0; i < particleCount; i++) {
+    const p = lm[i % lm.length];
+    pos[i * 3] = (p.x - 0.5) * 6;
+    pos[i * 3 + 1] = -(p.y - 0.5) * 6;
+    pos[i * 3 + 2] = -p.z * 4;
+  }
+  geometry.attributes.position.needsUpdate = true;
+});
+
+const videoElement = document.getElementById('video');
+
+const cameraFeed = new Camera(videoElement, {
+  onFrame: async () => {
+    await hands.send({ image: videoElement });
+  },
+  width: 640,
+  height: 480
+});
+
+cameraFeed.start();
+
+// =======================
+// ANIMATION LOOP
+// =======================
+function animate() {
+  requestAnimationFrame(animate);
+
+  handParticles.scale.lerp(new THREE.Vector3(scaleTarget, scaleTarget, scaleTarget), 0.15);
+
+  handParticles.rotation.y += rotationY * 0.05;
+  handParticles.rotation.x += rotationX * 0.05;
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// =======================
+// RESIZE
+// =======================
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script></body>
+</html>document.body.appendChild(renderer.domElement);
+
+// =======================
 // PARTICLE SPHERE
 // =======================
 const particleCount = 2500;
