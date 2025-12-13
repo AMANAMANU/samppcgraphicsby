@@ -82,17 +82,19 @@ hands.onResults(results => {
 
   const lm = results.multiHandLandmarks[0];
 
-  // HAND OPEN = SCALE (distance index tip to wrist)
-  const wrist = lm[0];
-  const indexTip = lm[8];
-  const dx = indexTip.x - wrist.x;
-  const dy = indexTip.y - wrist.y;
-  handOpenFactor = Math.sqrt(dx * dx + dy * dy);
-  scaleTarget = THREE.MathUtils.clamp(handOpenFactor * 4, 0.8, 3);
+  // DIRECT HAND REPRESENTATION (NO ARTIFICIAL SCALE)
+  // Use raw landmark spread only
+  scaleTarget = 1; // fixed scale(handOpenFactor * 4, 0.8, 3);
 
-  // ROTATION FROM HAND MOVEMENT
-  rotationY = (indexTip.x - 0.5) * 4;
-  rotationX = (indexTip.y - 0.5) * 4;
+  // NO ARTIFICIAL ROTATION
+  rotationX = 0;
+  rotationY = 0;
+
+  // Calculate true 3D orientation from wrist->index direction
+  const dirX = indexTip.x - wrist.x;
+  const dirY = indexTip.y - wrist.y;
+  const angleZ = Math.atan2(dirY, dirX);
+  handParticles.rotation.z = -angleZ; (indexTip.y - 0.5) * 4;
 
   // MAP HAND LANDMARKS INTO PARTICLES
   const pos = geometry.attributes.position.array;
@@ -123,10 +125,8 @@ cameraFeed.start();
 function animate() {
   requestAnimationFrame(animate);
 
-  handParticles.scale.lerp(new THREE.Vector3(scaleTarget, scaleTarget, scaleTarget), 0.15);
-
-  handParticles.rotation.y += rotationY * 0.05;
-  handParticles.rotation.x += rotationX * 0.05;
+  // LOCK SCALE & ROTATION TO HAND ONLY
+  handParticles.scale.set(1, 1, 1);
 
   renderer.render(scene, camera);
 }
