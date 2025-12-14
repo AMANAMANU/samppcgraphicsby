@@ -3,48 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Solar System - Earth Focus</title>
+    <title>3D Hand Hologram Tracker</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
         
+        /* Video feed element for tracking (can be hidden or shown) */
         #input_video { 
             position: absolute; bottom: 20px; right: 20px; 
             width: 240px; height: 180px; z-index: 2; 
-            border: 2px solid rgba(255,255,255,0.3); 
-            border-radius: 10px;
-            transform: scaleX(-1); opacity: 0.7;
+            transform: scaleX(-1); /* Mirror the video feed */
+            opacity: 0.1; /* Make it nearly invisible, or set to 0 to hide completely */
         }
 
         #ui-layer {
-            position: absolute; top: 20px; left: 20px; z-index: 5;
-            color: rgba(255, 255, 255, 0.8);
-            background: rgba(0, 0, 0, 0.6);
-            padding: 15px; border-radius: 8px; pointer-events: none;
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 5; color: white; background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px; border-radius: 8px; font-size: 1.1rem;
+            text-align: center;
         }
-        h1 { margin: 0 0 10px 0; font-size: 1.2rem; color: #ffcc00; }
-        p { margin: 5px 0; font-size: 0.9rem; }
-        .key { font-weight: bold; color: #00ffff; }
-        .alert { color: #ff4444; font-weight: bold; }
+        .key { color: #00ffff; }
+        .alert { color: #ffcc00; }
     </style>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
     <div id="ui-layer">
-        <h1>Solar Gesture Control</h1>
-        <p><span class="key">☝️ Index Finger:</span> Toggle Earth/Sun View</p>
-        <p><span class="key">✊ Fist:</span> Change Colors</p>
-        <p><span class="key">✋ Open Hand:</span> Rotate Camera</p>
-        <p><span class="key">👐 Two Hands:</span> Zoom</p>
-        <p><i>Current Focus: <span id="focus-status" style="color:yellow">SUN</span></i></p>
+        <div class="alert">3D Hand Hologram</div>
+        <div id="status">Waiting for camera...</div>
     </div>
 
     <video id="input_video" autoplay playsinline></video>
+    
     <div id="canvas-container"></div>
 
 <script>
@@ -53,239 +47,175 @@
     // ==========================================
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x000000, 0.0005);
 
-    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 10000);
-    camera.position.z = 500;
-    camera.position.y = 100;
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 20; // Position camera far enough to see the hand
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
-    // --- SUN ---
-    const sunGeo = new THREE.SphereGeometry(25, 32, 32);
-    const sunMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
-    const sun = new THREE.Mesh(sunGeo, sunMat);
-    scene.add(sun);
-    
-    // Sun Glow Sprite
-    const canvas = document.createElement('canvas');
-    canvas.width = 32; canvas.height = 32;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-    grad.addColorStop(0, 'rgba(255,255,255,1)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad; ctx.fillRect(0,0,32,32);
-    const glowTex = new THREE.Texture(canvas); glowTex.needsUpdate = true;
-    
-    const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff4400, blending: THREE.AdditiveBlending }));
-    sunGlow.scale.set(120, 120, 1);
-    scene.add(sunGlow);
+    // Add a subtle ambient light and a directional light for better visibility
+    scene.add(new THREE.AmbientLight(0x404040));
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(0, 10, 10);
+    scene.add(directionalLight);
 
-    // --- EARTH ---
-    const earthGroup = new THREE.Group(); // Pivot point for orbit
-    scene.add(earthGroup);
+    // --- Hand Object Initialization ---
+    const HAND_GROUP = new THREE.Group();
+    scene.add(HAND_GROUP);
 
-    const earthGeo = new THREE.SphereGeometry(10, 32, 32);
-    const earthMat = new THREE.MeshPhongMaterial({ color: 0x2233ff, emissive: 0x112244 });
-    const earth = new THREE.Mesh(earthGeo, earthMat);
-    earth.position.set(150, 0, 0); // Distance from Sun
-    earthGroup.add(earth);
+    const SPHERE_COUNT = 21;
+    const sphere_size = 0.5;
+    const spheres = []; // To hold the joint spheres
+    const lines = [];   // To hold the bone lines
 
-    // Earth Trail/Orbit Line
-    const orbitCurve = new THREE.EllipseCurve(0, 0, 150, 150, 0, 2 * Math.PI, false, 0);
-    const orbitPoints = orbitCurve.getPoints(100);
-    const orbitGeo = new THREE.BufferGeometry().setFromPoints(orbitPoints);
-    const orbitMat = new THREE.LineBasicMaterial({ color: 0x4444ff, opacity: 0.3, transparent: true });
-    const orbitLine = new THREE.Line(orbitGeo, orbitMat);
-    orbitLine.rotation.x = Math.PI / 2;
-    scene.add(orbitLine);
+    // Material for a glowing, holographic look
+    const sphereMaterial = new THREE.MeshPhongMaterial({
+        color: 0x00ffff,
+        emissive: 0x00ffff,
+        emissiveIntensity: 0.5,
+        shininess: 100
+    });
+    const lineMaterial = new THREE.LineBasicMaterial({
+        color: 0x00ffaa,
+        linewidth: 3 // Note: linewidth is often ignored by WebGLRenderer
+    });
 
-    // Lighting for Earth
-    const light = new THREE.PointLight(0xffffff, 1.5, 500);
-    scene.add(light); // Sun light
-
-    // --- PARTICLES ---
-    const particlesGeo = new THREE.BufferGeometry();
-    const count = 1500;
-    const posArray = new Float32Array(count * 3);
-    const colArray = new Float32Array(count * 3);
-    const orbitData = [];
-
-    const c1 = new THREE.Color(0xffaa33);
-    const c2 = new THREE.Color(0x3366ff);
-
-    for(let i=0; i<count; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const r = 60 + Math.random() * 400;
-        const x = Math.cos(angle) * r;
-        const z = Math.sin(angle) * r;
-        const y = (Math.random() - 0.5) * 30;
-        
-        posArray[i*3] = x; posArray[i*3+1] = y; posArray[i*3+2] = z;
-        
-        orbitData.push({ r: r, angle: angle, speed: (10/r) * 0.5, y: y });
-
-        const mixed = c1.clone().lerp(c2, r/400);
-        colArray[i*3] = mixed.r; colArray[i*3+1] = mixed.g; colArray[i*3+2] = mixed.b;
-    }
-    particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-    particlesGeo.setAttribute('color', new THREE.BufferAttribute(colArray, 3));
-
-    const particles = new THREE.Points(particlesGeo, new THREE.PointsMaterial({
-        size: 3, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true
-    }));
-    scene.add(particles);
-
-    // ==========================================
-    // 2. LOGIC & STATE
-    // ==========================================
-    const state = {
-        targetRotX: 0, targetRotY: 0,
-        currRotX: 0, currRotY: 0,
-        zoom: 400, targetZoom: 400,
-        
-        focusTarget: 'sun', // 'sun' or 'earth'
-        lastToggleTime: 0,
-        
-        cameraLookAt: new THREE.Vector3(0,0,0), // Interpolated lookAt
-        earthAngle: 0
-    };
-
-    const focusText = document.getElementById('focus-status');
-
-    function toggleFocus() {
-        const now = Date.now();
-        if (now - state.lastToggleTime > 1000) { // 1 second cooldown
-            state.lastToggleTime = now;
-            state.focusTarget = (state.focusTarget === 'sun') ? 'earth' : 'sun';
-            
-            focusText.innerText = state.focusTarget.toUpperCase();
-            focusText.style.color = state.focusTarget === 'sun' ? 'yellow' : 'cyan';
-            
-            // Adjust zoom for better view automatically
-            state.targetZoom = state.focusTarget === 'earth' ? 80 : 400; 
-        }
+    // Create 21 spheres for the joints (landmarks)
+    for (let i = 0; i < SPHERE_COUNT; i++) {
+        const sphereGeo = new THREE.SphereGeometry(sphere_size, 8, 8);
+        const sphere = new THREE.Mesh(sphereGeo, sphereMaterial.clone());
+        spheres.push(sphere);
+        HAND_GROUP.add(sphere);
     }
 
-    function randomizeColors() {
-        if(Date.now() - state.lastToggleTime < 500) return; // Share debounce
-        const r1 = Math.random(), r2 = Math.random();
-        const colors = particles.geometry.attributes.color.array;
-        const _c1 = new THREE.Color().setHSL(r1, 1, 0.5);
-        const _c2 = new THREE.Color().setHSL(r2, 1, 0.5);
-        
-        for(let i=0; i<count; i++) {
-            const mixed = _c1.clone().lerp(_c2, orbitData[i].r/400);
-            colors[i*3] = mixed.r; colors[i*3+1] = mixed.g; colors[i*3+2] = mixed.b;
-        }
-        particles.geometry.attributes.color.needsUpdate = true;
+    // Define the bone connections based on MediaPipe hand landmarks (21 points)
+    // Each pair is [start_index, end_index]
+    const CONNECTIONS = [
+        [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
+        [0, 5], [5, 6], [6, 7], [7, 8],       // Index
+        [9, 10], [10, 11], [11, 12],          // Middle
+        [0, 9], [9, 13], [13, 14], [14, 15], [15, 16], // Middle-Ring
+        [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
+    ];
+
+    // Create lines for the bones
+    for (const [start, end] of CONNECTIONS) {
+        // Line will be updated every frame, so we use an empty geometry initially
+        const geometry = new THREE.BufferGeometry();
+        const line = new THREE.Line(geometry, lineMaterial);
+        lines.push({ start: start, end: end, object: line });
+        HAND_GROUP.add(line);
     }
 
     // ==========================================
-    // 3. HAND TRACKING
+    // 2. COORDINATE MAPPING
+    // ==========================================
+
+    /* * MediaPipe coordinates are normalized (0 to 1) relative to the video feed.
+     * We need to map them to world space, considering:
+     * 1. X-axis reversal (for mirroring)
+     * 2. Scaling (to make the hand the right size in the 3D world)
+     * 3. Centering (so the hand is near the origin)
+    */
+
+    const SCALE_FACTOR = 40; // Adjust this to change the hand's size
+    const cameraLookAt = new THREE.Vector3(0, 0, 0);
+
+    function mapMediaPipeToThreeJS(landmark) {
+        // x: 1 - landmark.x reverses the X-axis for mirroring
+        // y: (1 - landmark.y) maps the Y axis (0=top in MediaPipe, 0=center in Three.js)
+        // z: landmark.z is the depth, often negative (away from camera)
+        
+        const x = (1 - landmark.x) * SCALE_FACTOR - (SCALE_FACTOR / 2); // Reverse X and center
+        const y = (1 - landmark.y) * SCALE_FACTOR - (SCALE_FACTOR / 2); // Reverse Y and center
+        const z = landmark.z * SCALE_FACTOR; // Use Z as depth
+
+        return new THREE.Vector3(x, y, z);
+    }
+
+    // ==========================================
+    // 3. MEDIAPIPE HAND TRACKING & UPDATE
     // ==========================================
     const videoElement = document.getElementById('input_video');
+    const statusDiv = document.getElementById('status');
+    let landmarkPositions = []; // Array to store calculated 3D positions
 
     function onResults(results) {
-        if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
-
-        const h1 = results.multiHandLandmarks[0];
-        const h2 = results.multiHandLandmarks.length > 1 ? results.multiHandLandmarks[1] : null;
-
-        // --- 2 Hands: ZOOM ---
-        if (h2) {
-            const d = Math.hypot(h1[0].x - h2[0].x, h1[0].y - h2[0].y);
-            // Inverted: hands apart (d=0.8) -> zoom=100, hands close (d=0.1) -> zoom=800
-            const z = 800 - (d * 800);
-            state.targetZoom = Math.max(50, Math.min(1000, z));
-        } 
-        else {
-            // --- 1 Hand Logic ---
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            statusDiv.innerHTML = `<span class="alert">Tracking Hand: ${results.multiHandedness[0].label}</span>`;
             
-            // Check Fingers (Tip y < PIP y means finger is extended UP in screen space)
-            // Note: y=0 is top, y=1 is bottom. So Small Y is UP.
-            const indexUp = h1[8].y < h1[6].y;
-            const middleClosed = h1[12].y > h1[10].y;
-            const ringClosed = h1[16].y > h1[14].y;
-            const pinkyClosed = h1[20].y > h1[18].y;
+            const handLandmarks = results.multiHandLandmarks[0];
+            landmarkPositions = [];
+            
+            // 1. Convert all 21 normalized landmarks to Three.js coordinates
+            for (let i = 0; i < SPHERE_COUNT; i++) {
+                const vec3 = mapMediaPipeToThreeJS(handLandmarks[i]);
+                landmarkPositions.push(vec3);
+            }
 
-            // GESTURE: Pointing Up (Index only)
-            if (indexUp && middleClosed && ringClosed && pinkyClosed) {
-                toggleFocus();
+            // 2. Update the position of all spheres
+            for (let i = 0; i < SPHERE_COUNT; i++) {
+                spheres[i].position.copy(landmarkPositions[i]);
+                // Depth cueing: Make distant spheres slightly smaller
+                // Z is usually negative (closer to camera)
+                spheres[i].scale.setScalar(1 - landmarkPositions[i].z / 40); 
             }
-            // GESTURE: Fist (All closed)
-            else if (!indexUp && middleClosed && ringClosed && pinkyClosed) {
-                randomizeColors();
+
+            // 3. Update the lines (bones)
+            for (const connection of lines) {
+                const startPos = landmarkPositions[connection.start];
+                const endPos = landmarkPositions[connection.end];
+
+                const points = [startPos, endPos];
+                connection.object.geometry.setFromPoints(points);
             }
-            // GESTURE: Open Hand (Rotate)
-            else {
-                // Center is 0.5
-                state.targetRotY = (h1[9].x - 0.5) * 5; 
-                state.targetRotX = (h1[9].y - 0.5) * 3;
-            }
+        
+        } else {
+            statusDiv.innerHTML = "No hand detected. <span class='key'>Ensure your hand is clearly visible.</span>";
+            // Hide the hand when not detected
+            HAND_GROUP.visible = false;
         }
+
+        HAND_GROUP.visible = landmarkPositions.length > 0;
     }
 
     const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+    hands.setOptions({ 
+        maxNumHands: 1, // Only track one hand for simplicity
+        modelComplexity: 1, 
+        minDetectionConfidence: 0.7, 
+        minTrackingConfidence: 0.7 
+    });
     hands.onResults(onResults);
 
+    // Setup the camera feed for MediaPipe
     const cameraUtils = new Camera(videoElement, {
         onFrame: async () => { await hands.send({image: videoElement}); },
-        width: 320, height: 240
+        width: 640, height: 480 // Higher resolution for better tracking
     });
-    cameraUtils.start();
+    cameraUtils.start().then(() => {
+        statusDiv.innerText = "Camera Active. Show your hand!";
+    }).catch(err => {
+        statusDiv.innerHTML = `<span class="alert">Error: ${err.name}. Check camera permissions.</span>`;
+    });
 
     // ==========================================
-    // 4. ANIMATION
+    // 4. ANIMATION LOOP
     // ==========================================
+
     function animate() {
         requestAnimationFrame(animate);
 
-        // 1. Move Earth
-        state.earthAngle += 0.005; // Orbit speed
-        earth.position.x = Math.cos(state.earthAngle) * 150;
-        earth.position.z = Math.sin(state.earthAngle) * 150;
-        earth.rotation.y += 0.02; // Earth spin
-
-        // 2. Camera Controls Smoothing
-        state.currRotX += (state.targetRotX - state.currRotX) * 0.05;
-        state.currRotY += (state.targetRotY - state.currRotY) * 0.05;
-        state.zoom += (state.targetZoom - state.zoom) * 0.05;
-
-        // 3. Determine Focus Point (Lerp for smooth transition)
-        const targetVec = (state.focusTarget === 'earth') ? earth.position : new THREE.Vector3(0,0,0);
-        state.cameraLookAt.lerp(targetVec, 0.05);
-
-        // 4. Calculate Camera Position
-        // We orbit around the *current focus point*
-        const r = state.zoom;
-        const theta = state.currRotY;
-        const phi = state.currRotX;
-
-        // Basic orbital math relative to the lookAt target
-        camera.position.x = state.cameraLookAt.x + r * Math.sin(theta);
-        camera.position.y = state.cameraLookAt.y + r * Math.sin(phi);
-        camera.position.z = state.cameraLookAt.z + r * Math.cos(theta);
-
-        camera.lookAt(state.cameraLookAt);
-
-        // 5. Particles
-        const positions = particles.geometry.attributes.position.array;
-        for(let i=0; i<count; i++){
-            const d = orbitData[i];
-            d.angle += d.speed * 0.01;
-            positions[i*3] = Math.cos(d.angle) * d.r;
-            positions[i*3+2] = Math.sin(d.angle) * d.r;
-        }
-        particles.geometry.attributes.position.needsUpdate = true;
+        // Optional: Rotate the hand group slightly to simulate hologram effect
+        // HAND_GROUP.rotation.y += 0.005; 
 
         renderer.render(scene, camera);
     }
     animate();
 
+    // Resize Handler
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
