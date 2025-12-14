@@ -1,644 +1,181 @@
-<!DOCTYPE html>
-<html lang="en">
+<!DOCTYPE html><html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gesture & Audio Controlled Particles</title>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1658428271/drawing_utils.js"></script>
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #111;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            color: #fff;
-        }
-
-        #container {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            z-index: 1;
-        }
-
-        #ui-panel {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            z-index: 10;
-            background-color: rgba(0, 0, 0, 0.75);
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-            width: 280px;
-        }
-
-        .ui-section {
-            margin-bottom: 15px;
-            padding-bottom: 15px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        .ui-section:last-child {
-            border-bottom: none;
-            padding-bottom: 0;
-            margin-bottom: 0;
-        }
-
-        h3 {
-            margin-top: 0;
-            font-size: 1.1em;
-            color: #4CAF50; /* A touch of color for headings */
-        }
-
-        .template-buttons button {
-            background-color: #2c2c2c;
-            color: #fff;
-            border: 1px solid #444;
-            padding: 8px 12px;
-            margin: 5px;
-            border-radius: 5px;
-            cursor: pointer;
-            transition: background-color 0.2s, transform 0.1s;
-        }
-
-        .template-buttons button:hover {
-            background-color: #4CAF50;
-            border-color: #4CAF50;
-        }
-        
-        .template-buttons button.active {
-            background-color: #4CAF50;
-            border-color: #4CAF50;
-            font-weight: bold;
-        }
-
-        #colorPickerLabel {
-            display: block;
-            margin-bottom: 8px;
-        }
-
-        #particleColor {
-            width: 100%;
-            height: 40px;
-            border: 3px solid #4CAF50;
-            padding: 0;
-            border-radius: 5px;
-            cursor: pointer;
-            box-sizing: border-box;
-        }
-
-        #video-feed {
-            display: none; /* Hide the video feed for a clean look */
-        }
-
-        #permission-message {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            padding: 20px;
-            background: rgba(255, 0, 0, 0.8);
-            border-radius: 10px;
-            font-size: 1.2em;
-            text-align: center;
-            z-index: 100;
-            display: none;
-        }
-
-        #status-bar {
-            position: absolute;
-            bottom: 10px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 10;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 5px 15px;
-            border-radius: 5px;
-            font-size: 0.9em;
-            min-width: 200px;
-            text-align: center;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>Hand‑Tracked 3D Particle System</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    canvas { display: block; }
+    #hint {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #aaa;
+      font-family: monospace;
+      font-size: 13px;
+      opacity: 0.8;
+    }
+  </style>
 </head>
 <body>
-
-    <div id="container"></div>
-    <video id="video-feed" width="640" height="480" autoplay></video>
-    <canvas id="gesture-canvas" style="display: none;"></canvas>
-
-    <div id="ui-panel">
-        <div class="ui-section">
-            <h3>Particle Template</h3>
-            <div class="template-buttons" id="template-controls">
-                </div>
-        </div>
-
-        <div class="ui-section">
-            <label id="colorPickerLabel" for="particleColor">Particle Color</label>
-            <input type="color" id="particleColor" value="#4CAF50">
-        </div>
-        
-        <p>👋 Close your hand to **shrink** the particles and spread them out.</p>
-        <p>🎤 Talk or play music for particle **intensity** and beat response.</p>
-    </div>
-
-    <div id="status-bar">
-        Status: Initializing...
-    </div>
-
-    <div id="permission-message">
-        <h3>Permission Denied!</h3>
-        <p>Please allow both Camera and Microphone access to run this interactive application.</p>
-        <p>Refresh the page to try again.</p>
-    </div>
-
-    <script>
-        // --- Global Variables and Constants ---
-        const container = document.getElementById('container');
-        const videoElement = document.getElementById('video-feed');
-        const statusBar = document.getElementById('status-bar');
-        const permissionMessage = document.getElementById('permission-message');
-
-        const N_PARTICLES = 10000;
-        let scene, camera, renderer, particles, geometry, material;
-        let audioContext, analyser, microphone, dataArray;
-        let handClosedFactor = 0.0; // 0.0 (open) to 1.0 (closed)
-        let particleTemplateName = 'fireworks';
-        let beatTimer = 0;
-        let lastBeatTime = performance.now();
-        const BEAT_THRESHOLD = 180; // Volume threshold for beat detection
-        const BEAT_DECAY = 0.9;
-        const PARTICLE_TEMPLATES = {
-            'heart': generateHeart,
-            'flower': generateFlower,
-            'saturn': generateSaturn,
-            'buddha': generateBuddha,
-            'fireworks': generateFireworks
-        };
-
-
-        // --- Three.js Setup ---
-
-        function initThree() {
-            // Scene, Camera, Renderer
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.z = 5;
-
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            container.appendChild(renderer.domElement);
-
-            // Particle System initialization
-            geometry = new THREE.BufferGeometry();
-            material = new THREE.PointsMaterial({
-                size: 0.05,
-                color: new THREE.Color(document.getElementById('particleColor').value),
-                blending: THREE.AdditiveBlending,
-                transparent: true,
-                depthWrite: false,
-                sizeAttenuation: true
-            });
-
-            // Initial particle setup
-            setupParticles(particleTemplateName);
-
-            // Window Resize Handler
-            window.addEventListener('resize', onWindowResize, false);
-
-            statusBar.textContent = 'Status: 3D Scene Ready.';
-        }
-
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-
-        // --- Particle Template Generators ---
-
-        function generateHeart(positions) {
-            const scale = 1.5;
-            for (let i = 0; i < N_PARTICLES; i++) {
-                // Heart curve parameterized by t in [0, 2*PI]
-                let t = Math.random() * 2 * Math.PI;
-                let x = scale * 16 * Math.sin(t) ** 3;
-                let y = scale * (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
-                let z = Math.random() * scale * 2 - scale; // Small depth for 3D effect
-                
-                positions[i * 3 + 0] = x * 0.05;
-                positions[i * 3 + 1] = y * 0.05 + 1; // Center it a bit higher
-                positions[i * 3 + 2] = z * 0.1;
-            }
-        }
-
-        function generateFlower(positions) {
-            const scale = 2.0;
-            const petals = 6;
-            const centerR = 0.2;
-            for (let i = 0; i < N_PARTICLES; i++) {
-                let r, a;
-                if (i < N_PARTICLES * 0.1) { // 10% for center
-                    r = Math.random() * centerR;
-                    a = Math.random() * 2 * Math.PI;
-                } else { // 90% for petals
-                    a = (i / N_PARTICLES) * 2 * Math.PI;
-                    r = scale * Math.cos(petals * a) * 0.5 + 0.5; // Polar rose curve
-                    r = r * 0.8 + 0.5; // Adjust distance
-                }
-
-                let x = r * Math.cos(a);
-                let y = r * Math.sin(a);
-                let z = (Math.random() - 0.5) * 0.5;
-
-                positions[i * 3 + 0] = x;
-                positions[i * 3 + 1] = y;
-                positions[i * 3 + 2] = z;
-            }
-        }
-        
-        function generateSaturn(positions) {
-            const radius = 1.5;
-            const ringInner = 1.8;
-            const ringOuter = 3.0;
-            for (let i = 0; i < N_PARTICLES; i++) {
-                let x, y, z;
-                if (i < N_PARTICLES * 0.2) { // 20% for the sphere (planet)
-                    let r = Math.pow(Math.random(), 1/3) * radius;
-                    let a = Math.random() * 2 * Math.PI;
-                    let b = Math.random() * Math.PI;
-                    x = r * Math.sin(b) * Math.cos(a);
-                    y = r * Math.sin(b) * Math.sin(a);
-                    z = r * Math.cos(b);
-                } else { // 80% for the ring
-                    let r = ringInner + (ringOuter - ringInner) * Math.random();
-                    let a = Math.random() * 2 * Math.PI;
-                    let zOffset = (Math.random() - 0.5) * 0.1; // Thin ring
-                    
-                    x = r * Math.cos(a);
-                    y = zOffset;
-                    z = r * Math.sin(a);
-                    // Rotate the ring a bit for better viewing
-                    let tempX = x;
-                    x = tempX;
-                    y = z * Math.sin(0.3) + y * Math.cos(0.3);
-                    z = z * Math.cos(0.3) - tempX * Math.sin(0.3);
-
-                }
-
-                positions[i * 3 + 0] = x;
-                positions[i * 3 + 1] = y;
-                positions[i * 3 + 2] = z;
-            }
-        }
-        
-        function generateBuddha(positions) {
-            // A simple spherical/ellipsoidal arrangement for a more 'meditative' feel
-            const radius = 2.0;
-            const height = 3.0;
-            for (let i = 0; i < N_PARTICLES; i++) {
-                let r = Math.pow(Math.random(), 1/3) * radius;
-                let a = Math.random() * 2 * Math.PI;
-                let b = Math.random() * Math.PI;
-                
-                let x = r * Math.sin(b) * Math.cos(a);
-                let y = r * Math.sin(b) * Math.sin(a) * (height/radius);
-                let z = r * Math.cos(b);
-                
-                // Lift the shape up
-                positions[i * 3 + 0] = x * 0.5;
-                positions[i * 3 + 1] = y * 0.5 + 0.5;
-                positions[i * 3 + 2] = z * 0.5;
-            }
-        }
-
-        function generateFireworks(positions) {
-            // Sphere that will expand, good for dynamic explosion feel
-            const radius = 0.1; // Start small
-            for (let i = 0; i < N_PARTICLES; i++) {
-                let r = Math.pow(Math.random(), 1/3) * radius;
-                let a = Math.random() * 2 * Math.PI;
-                let b = Math.acos(Math.random() * 2 - 1); // For even sphere distribution
-
-                positions[i * 3 + 0] = r * Math.sin(b) * Math.cos(a);
-                positions[i * 3 + 1] = r * Math.sin(b) * Math.sin(a);
-                positions[i * 3 + 2] = r * Math.cos(b);
-            }
-        }
-
-
-        function setupParticles(templateName) {
-            // Remove existing particles
-            if (particles) {
-                scene.remove(particles);
-                geometry.dispose();
-            }
-
-            // Create new geometry and positions array
-            geometry = new THREE.BufferGeometry();
-            const positions = new Float32Array(N_PARTICLES * 3);
-            const initialPositions = new Float32Array(N_PARTICLES * 3);
-            const velocities = new Float32Array(N_PARTICLES * 3);
-            
-            // Generate shape based on template
-            const generator = PARTICLE_TEMPLATES[templateName];
-            generator(initialPositions);
-
-            // Initialize all particles with their initial positions and zero velocity
-            for (let i = 0; i < N_PARTICLES * 3; i++) {
-                positions[i] = initialPositions[i];
-                velocities[i] = 0;
-            }
-
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('initialPosition', new THREE.BufferAttribute(initialPositions, 3));
-            geometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
-            
-            // Create the particle system
-            particles = new THREE.Points(geometry, material);
-            scene.add(particles);
-
-            particleTemplateName = templateName;
-        }
-
-        // --- Audio Input Setup (Web Audio API) ---
-
-        async function initAudio() {
-            try {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioContext.createAnalyser();
-                analyser.fftSize = 2048;
-                const bufferLength = analyser.frequencyBinCount;
-                dataArray = new Uint8Array(bufferLength);
-
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                microphone = audioContext.createMediaStreamSource(stream);
-                microphone.connect(analyser);
-
-                statusBar.textContent = 'Status: Audio Input Active.';
-            } catch (err) {
-                console.error('Error getting microphone stream:', err);
-                statusBar.textContent = 'Status: Audio Error. Microphone access denied or unavailable.';
-            }
-        }
-
-        function analyzeAudio() {
-            if (!analyser) return 0;
-
-            analyser.getByteFrequencyData(dataArray);
-
-            // Calculate overall volume (RMS approximation)
-            let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i] * dataArray[i];
-            }
-            const average = Math.sqrt(sum / dataArray.length);
-            const volume = average / 255; // Normalize to 0-1
-
-            // Simple beat detection (spike in volume)
-            if (average > BEAT_THRESHOLD && (performance.now() - lastBeatTime) > 200) {
-                beatTimer = 1.0; // Strong beat
-                lastBeatTime = performance.now();
-            }
-            
-            // Decay the beat timer
-            beatTimer = Math.max(0, beatTimer * BEAT_DECAY - 0.05);
-
-            return volume;
-        }
-
-
-        // --- Hand Tracking Setup (MediaPipe Hands) ---
-
-        const hands = new Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`,
-        });
-        
-        hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.8,
-            minTrackingConfidence: 0.5
-        });
-
-        hands.onResults(onResults);
-
-        async function initCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-                videoElement.srcObject = stream;
-                
-                return new Promise((resolve) => {
-                    videoElement.onloadeddata = () => {
-                        videoElement.play();
-                        resolve();
-                    };
-                });
-            } catch (err) {
-                console.error('Error getting video stream:', err);
-                permissionMessage.style.display = 'block';
-                statusBar.textContent = 'Status: Camera Error. Access denied or unavailable.';
-                throw err;
-            }
-        }
-
-        function getHandClosureFactor(landmarks) {
-            // A simple metric for "hand closing" (tension)
-            // Measure the average distance between the tips of the fingers (8, 12, 16, 20) and the tip of the thumb (4).
-            
-            const thumbTip = landmarks[4];
-            const fingerTips = [landmarks[8], landmarks[12], landmarks[16], landmarks[20]]; // Index, Middle, Ring, Pinky
-
-            let totalDistance = 0;
-            fingerTips.forEach(tip => {
-                // Euclidean distance in 3D space (x, y, z are normalized coordinates)
-                const dist = Math.sqrt(
-                    (tip.x - thumbTip.x) ** 2 + 
-                    (tip.y - thumbTip.y) ** 2 + 
-                    (tip.z - thumbTip.z) ** 2
-                );
-                totalDistance += dist;
-            });
-
-            const avgDistance = totalDistance / fingerTips.length;
-            
-            // Normalize distance to a factor (0.0 to 1.0)
-            // These thresholds are empirical: small distance means closed, large means open.
-            const minOpenDist = 0.5;
-            const maxClosedDist = 0.05;
-
-            // Invert the value: larger distance -> factor closer to 0 (open)
-            // Smaller distance -> factor closer to 1 (closed)
-            
-            let factor = (minOpenDist - avgDistance) / (minOpenDist - maxClosedDist);
-            factor = Math.max(0.0, Math.min(1.0, factor));
-            
-            return factor;
-        }
-
-        function onResults(results) {
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                // Use the hand that is detected first, or average both
-                let totalClosure = 0;
-                results.multiHandLandmarks.forEach(landmarks => {
-                    totalClosure += getHandClosureFactor(landmarks);
-                });
-                // Average the closure factor of all detected hands
-                handClosedFactor = totalClosure / results.multiHandLandmarks.length;
-                
-                statusBar.textContent = `Status: Tracking ${results.multiHandLandmarks.length} Hand(s). Closure: ${handClosedFactor.toFixed(2)}`;
-            } else {
-                handClosedFactor = 0.0;
-                statusBar.textContent = 'Status: Ready. Please show your hands to the camera.';
-            }
-        }
-        
-        // Polling loop for camera feed
-        let cameraPollingInterval = null;
-        function startCameraPolling() {
-            if (videoElement.srcObject) {
-                cameraPollingInterval = setInterval(() => {
-                    hands.send({ image: videoElement });
-                }, 1000 / 30); // Process video at 30 FPS
-            }
-        }
-
-
-        // --- UI Setup ---
-
-        function initUI() {
-            const templateControls = document.getElementById('template-controls');
-            Object.keys(PARTICLE_TEMPLATES).forEach(name => {
-                const button = document.createElement('button');
-                button.textContent = name.charAt(0).toUpperCase() + name.slice(1);
-                button.setAttribute('data-template', name);
-                button.addEventListener('click', () => {
-                    setupParticles(name);
-                    
-                    // Update active button state
-                    document.querySelectorAll('.template-buttons button').forEach(btn => btn.classList.remove('active'));
-                    button.classList.add('active');
-                });
-                templateControls.appendChild(button);
-            });
-            
-            // Set initial active button
-            document.querySelector(`button[data-template='${particleTemplateName}']`).classList.add('active');
-
-            // Color Picker
-            const colorPicker = document.getElementById('particleColor');
-            colorPicker.addEventListener('input', (event) => {
-                material.color.set(event.target.value);
-            });
-        }
-
-
-        // --- Animation Loop ---
-
-        function animate() {
-            requestAnimationFrame(animate);
-
-            // 1. Audio Analysis
-            const volume = analyzeAudio();
-            
-            // 2. Gesture/Audio Mapping
-            const positions = particles.geometry.attributes.position.array;
-            const initialPositions = particles.geometry.attributes.initialPosition.array;
-            const velocities = particles.geometry.attributes.velocity.array;
-            
-            // Particle Scale/Spread Control (Gesture)
-            // handClosedFactor from 0.0 (open) to 1.0 (closed)
-            // Closed hand (1.0) -> smaller radius, wider spread (controlled by scale and drag)
-            // Open hand (0.0) -> larger radius, tighter cluster
-            
-            // Scale Factor: 1.0 (closed) to 5.0 (open) - Gesture controls size
-            const gestureScale = 1.0 + (1.0 - handClosedFactor) * 4.0; 
-            
-            // Drag Factor: controls how fast particles return to original shape - Gesture controls spread
-            const dragFactor = 0.9 + handClosedFactor * 0.08; // 0.90 (open) to 0.98 (closed)
-            
-            // Velocity Multiplier (Audio) - Louder sound/beats cause more intense movement
-            // Add a spike from beatTimer
-            const audioIntensity = (volume * 0.5) + (beatTimer * 1.5); // Max 0.5 to 2.0
-            const audioVelocityMultiplier = 0.03 * audioIntensity;
-
-
-            for (let i = 0; i < N_PARTICLES; i++) {
-                const i3 = i * 3;
-                
-                // Get current position (p) and initial position (p0)
-                const p = [positions[i3], positions[i3 + 1], positions[i3 + 2]];
-                const p0 = [initialPositions[i3], initialPositions[i3 + 1], initialPositions[i3 + 2]];
-
-                // Apply Gesture Scale (Size)
-                const targetPositionX = p0[0] * gestureScale;
-                const targetPositionY = p0[1] * gestureScale;
-                const targetPositionZ = p0[2] * gestureScale;
-
-                // Calculate Spring Force (Return to shape)
-                const springForceX = (targetPositionX - p[0]) * 0.05;
-                const springForceY = (targetPositionY - p[1]) * 0.05;
-                const springForceZ = (targetPositionZ - p[2]) * 0.05;
-                
-                // Apply Spring Force
-                velocities[i3 + 0] += springForceX;
-                velocities[i3 + 1] += springForceY;
-                velocities[i3 + 2] += springForceZ;
-
-                // Apply Audio Force (Movement/Vibration based on volume/beats)
-                velocities[i3 + 0] += (Math.random() - 0.5) * audioVelocityMultiplier;
-                velocities[i3 + 1] += (Math.random() - 0.5) * audioVelocityMultiplier;
-                velocities[i3 + 2] += (Math.random() - 0.5) * audioVelocityMultiplier;
-                
-                // Apply Drag (Friction, controlled by gesture for spread effect)
-                velocities[i3 + 0] *= dragFactor;
-                velocities[i3 + 1] *= dragFactor;
-                velocities[i3 + 2] *= dragFactor;
-                
-                // Update position
-                positions[i3 + 0] += velocities[i3 + 0];
-                positions[i3 + 1] += velocities[i3 + 1];
-                positions[i3 + 2] += velocities[i3 + 2];
-            }
-
-            particles.geometry.attributes.position.needsUpdate = true;
-            particles.material.size = 0.05 + audioIntensity * 0.02; // Change size with audio
-            
-            // Simple rotation for visual interest
-            particles.rotation.y += 0.001 * (1 + handClosedFactor); 
-
-            renderer.render(scene, camera);
-        }
-
-
-        // --- Main Initialization ---
-
-        async function main() {
-            initThree();
-            initUI();
-            
-            try {
-                // Request both camera and audio permissions concurrently
-                await Promise.all([initCamera(), initAudio()]);
-                
-                startCameraPolling();
-                animate();
-                
-                statusBar.textContent = 'Status: Ready! Hand and Audio control is active.';
-            } catch (error) {
-                // Errors handled in initCamera and initAudio will show the permission message
-                console.log('Initialization failed due to permissions or device issues.');
-            }
-        }
-
-        main();
-
-    </script>
-</body>
+<div id="hint">✋ Open palm = expand | ☝️ Index up = heart | ✌️ Two fingers = flower | ✊ Fist = fireworks</div><script type="module">
+/* =====================
+   IMPORTS
+===================== */
+import * as THREE from 'https://cdn.skypack.dev/three@0.155.0';
+import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
+import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
+
+/* =====================
+   THREE.JS SETUP
+===================== */
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x000000, 2, 10);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.z = 5;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+/* =====================
+   PARTICLES
+===================== */
+const COUNT = 8000;
+const geometry = new THREE.BufferGeometry();
+const positions = new Float32Array(COUNT * 3);
+const colors = new Float32Array(COUNT * 3);
+
+for (let i = 0; i < COUNT; i++) {
+  positions[i * 3] = (Math.random() - 0.5) * 2;
+  positions[i * 3 + 1] = (Math.random() - 0.5) * 2;
+  positions[i * 3 + 2] = (Math.random() - 0.5) * 2;
+
+  colors[i * 3] = 1;
+  colors[i * 3 + 1] = 0.5;
+  colors[i * 3 + 2] = 0.8;
+}
+
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+const material = new THREE.PointsMaterial({
+  size: 0.035,
+  vertexColors: true,
+  transparent: true,
+  blending: THREE.AdditiveBlending
+});
+
+const particles = new THREE.Points(geometry, material);
+scene.add(particles);
+
+/* =====================
+   SHAPE GENERATORS
+===================== */
+function shapeHeart() {
+  for (let i = 0; i < COUNT; i++) {
+    const t = Math.random() * Math.PI * 2;
+    const x = 0.8 * Math.pow(Math.sin(t), 3);
+    const y = 0.6 * (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) / 16;
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
+  }
+}
+
+function shapeFlower() {
+  for (let i = 0; i < COUNT; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.sin(5 * a);
+    positions[i * 3] = Math.cos(a) * r;
+    positions[i * 3 + 1] = Math.sin(a) * r;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
+  }
+}
+
+function shapeSaturn() {
+  for (let i = 0; i < COUNT; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const ring = i % 2 === 0 ? 1.2 : 0.6;
+    positions[i * 3] = Math.cos(a) * ring;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * 0.2;
+    positions[i * 3 + 2] = Math.sin(a) * ring;
+  }
+}
+
+function shapeFirework() {
+  for (let i = 0; i < COUNT; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const b = Math.random() * Math.PI * 2;
+    const r = Math.random() * 1.2;
+    positions[i * 3] = Math.cos(a) * Math.sin(b) * r;
+    positions[i * 3 + 1] = Math.cos(b) * r;
+    positions[i * 3 + 2] = Math.sin(a) * Math.sin(b) * r;
+  }
+}
+
+/* =====================
+   HAND TRACKING
+===================== */
+const video = document.createElement('video');
+
+const hands = new Hands({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
+
+hands.onResults(results => {
+  if (!results.multiHandLandmarks.length) return;
+
+  const lm = results.multiHandLandmarks[0];
+
+  const thumb = lm[4];
+  const index = lm[8];
+  const middle = lm[12];
+  const palm = lm[0];
+
+  const open = index.y < palm.y && middle.y < palm.y;
+  const fist = index.y > palm.y && middle.y > palm.y;
+
+  // Expansion
+  particles.scale.setScalar(open ? 1.5 : 1.0);
+
+  // Shape switching
+  if (index.y < palm.y && middle.y > palm.y) shapeHeart();
+  if (index.y < palm.y && middle.y < palm.y) shapeFlower();
+  if (fist) shapeFirework();
+
+  geometry.attributes.position.needsUpdate = true;
+});
+
+const cam = new Camera(video, {
+  onFrame: async () => await hands.send({ image: video }),
+  width: 640,
+  height: 480
+});
+cam.start();
+
+/* =====================
+   ANIMATION LOOP
+===================== */
+function animate() {
+  requestAnimationFrame(animate);
+  particles.rotation.y += 0.002;
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script></body>
 </html>
