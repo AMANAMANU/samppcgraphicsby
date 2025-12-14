@@ -2,38 +2,163 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Hand‑Tracked 3D Particle System</title>
+  <title>Gesture Controlled Particle Sphere</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Three.js -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
   <style>
-    body { margin: 0; overflow: hidden; background: #000; }
-    canvas { display: block; }
-    #hint {
-      position: fixed;
-      bottom: 10px;
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: radial-gradient(circle at center, #0b1220, #000000);
+      font-family: Arial, sans-serif;
+    }
+    #info {
+      position: absolute;
+      bottom: 15px;
       left: 50%;
       transform: translateX(-50%);
-      color: #aaa;
-      font-family: monospace;
-      font-size: 13px;
+      color: #00eaff;
+      font-size: 14px;
       opacity: 0.8;
+    }
+    video {
+      display: none;
     }
   </style>
 </head>
 <body>
-<div id="hint">✋ Open palm = expand | ☝️ Index up = heart | ✌️ Two fingers = flower | ✊ Fist = fireworks</div>
 
-<script type="module">
-/* =====================
-   IMPORTS
-===================== */
-import * as THREE from 'https://cdn.skypack.dev/three@0.155.0';
-import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
-import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
+<video id="video" autoplay></video>
+<div id="info">Pinch to scale · Move hand to rotate · Open palm to reset</div>
 
-/* =====================
-   THREE.JS SETUP
-===================== */
+<script>
+// =======================
+// THREE.JS SCENE
+// =======================
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x000000, 2, 10);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 6;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// =======================
+// HAND-DRIVEN PARTICLES (YOUR HAND = PARTICLES)
+// =======================
+const particleCount = 500;
+const geometry = new THREE.BufferGeometry();
+const positions = new Float32Array(particleCount * 3);
+
+for (let i = 0; i < particleCount * 3; i++) positions[i] = 0;
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+const material = new THREE.PointsMaterial({
+  color: 0x00eaff,
+  size: 0.04,
+  transparent: true,
+  opacity: 0.9
+});
+
+const handParticles = new THREE.Points(geometry, material);
+scene.add(handParticles);
+
+
+// =======================
+// HAND TRACKING (HAND CONTROLS EVERYTHING)
+// =======================
+let scaleTarget = 1;
+let rotationX = 0;
+let rotationY = 0;
+let handOpenFactor = 0; // controls size
+ // sphere | heart | ring
+
+const hands = new Hands({
+  locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
+
+hands.onResults(results => {
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
+
+  const lm = results.multiHandLandmarks[0];
+
+  // DIRECT HAND REPRESENTATION (NO ARTIFICIAL SCALE)
+  // Use raw landmark spread only
+  scaleTarget = 1; // fixed scale(handOpenFactor * 4, 0.8, 3);
+
+  // NO ARTIFICIAL ROTATION
+  rotationX = 0;
+  rotationY = 0;
+
+  // Calculate true 3D orientation from wrist->index direction
+  const dirX = indexTip.x - wrist.x;
+  const dirY = indexTip.y - wrist.y;
+  const angleZ = Math.atan2(dirY, dirX);
+  handParticles.rotation.z = -angleZ; (indexTip.y - 0.5) * 4;
+
+  // MAP HAND LANDMARKS INTO PARTICLES
+  const pos = geometry.attributes.position.array;
+  for (let i = 0; i < particleCount; i++) {
+    const p = lm[i % lm.length];
+    pos[i * 3] = (p.x - 0.5) * 6;
+    pos[i * 3 + 1] = -(p.y - 0.5) * 6;
+    pos[i * 3 + 2] = -p.z * 4;
+  }
+  geometry.attributes.position.needsUpdate = true;
+});
+
+const videoElement = document.getElementById('video');
+
+const cameraFeed = new Camera(videoElement, {
+  onFrame: async () => {
+    await hands.send({ image: videoElement });
+  },
+  width: 640,
+  height: 480
+});
+
+cameraFeed.start();
+
+// =======================
+// ANIMATION LOOP
+// =======================
+function animate() {
+  requestAnimationFrame(animate);
+
+  // LOCK SCALE & ROTATION TO HAND ONLY
+  handParticles.scale.set(1, 1, 1);
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// =======================
+// RESIZE
+// =======================
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
 camera.position.z = 5;
