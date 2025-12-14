@@ -3,225 +3,715 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Hand Hologram Tracker</title>
-    <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
-        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
-        
-        /* Video feed element for tracking (can be hidden or shown) */
-        #input_video { 
-            position: absolute; bottom: 20px; right: 20px; 
-            width: 240px; height: 180px; z-index: 2; 
-            transform: scaleX(-1); /* Mirror the video feed */
-            opacity: 0.1; /* Make it nearly invisible, or set to 0 to hide completely */
-        }
-
-        #ui-layer {
-            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-            z-index: 5; color: white; background: rgba(0, 0, 0, 0.7);
-            padding: 10px 20px; border-radius: 8px; font-size: 1.1rem;
-            text-align: center;
-        }
-        .key { color: #00ffff; }
-        .alert { color: #ffcc00; }
-    </style>
-    
+    <title>3D Particle Gesture Playground</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.17/dist/lil-gui.umd.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; position: fixed; top: 0; left: 0; z-index: 1; }
+        #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+        #gesture-debug { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: white; background: rgba(0, 0, 0, 0.5); padding: 5px 10px; border-radius: 5px; font-size: 14px; pointer-events: none; }
+        #readme { position: absolute; bottom: 10px; right: 10px; padding: 10px; max-width: 300px; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(5px); border-radius: 8px; color: white; font-size: 12px; pointer-events: auto; }
+        #readme h3 { margin-top: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.2); padding-bottom: 5px; }
+        #video-feed { position: absolute; bottom: 10px; left: 10px; width: 160px; height: 120px; border-radius: 8px; transform: scaleX(-1); object-fit: cover; opacity: 0.8; border: 2px solid #0096ff; }
+        
+        /* Custom UI for Template Selector in lil-gui */
+        .template-selector {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 5px;
+            padding: 5px;
+        }
+        .template-icon {
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 5px;
+            text-align: center;
+            font-size: 18px;
+            transition: background 0.2s, transform 0.1s;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid transparent;
+        }
+        .template-icon:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .template-icon.active {
+            background: rgba(0, 150, 255, 0.5);
+            border-color: #0096ff;
+            box-shadow: 0 0 8px rgba(0, 150, 255, 0.7);
+        }
+        .lil-gui.root {
+            /* Ensures UI panel has rounded corners and soft shadows */
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+        }
+        
+    </style>
 </head>
 <body>
 
-    <div id="ui-layer">
-        <div class="alert">3D Hand Hologram</div>
-        <div id="status">Waiting for camera...</div>
+    <div id="canvas-container"></div>
+    <video id="video-feed" autoplay playsinline></video>
+    <div id="overlay">
+        <div id="gesture-debug">Gesture Status: **Initializing...**</div>
+        <div id="readme">
+            <h3>README & Gestures</h3>
+            <p><strong>Gesture Control (Requires ML Libraries):</strong></p>
+            <ul>
+                <li><strong>Closer Hands (Fist):</strong> Particles Contract / Scale Down.</li>
+                <li><strong>Open Hands (Spread):</strong> Particles Expand / Spread.</li>
+                <li><strong>Quick Snap/Clap:</strong> Triggers **Fireworks** burst.</li>
+            </ul>
+            <p><strong>Mouse Fallback:</strong> Drag to rotate, Scroll to change spread/scale.</p>
+            <p><strong>Performance Tip:</strong> Lower Particle Count on older devices.</p>
+        </div>
     </div>
 
-    <video id="input_video" autoplay playsinline></video>
-    
-    <div id="canvas-container"></div>
-
-<script>
-    // ==========================================
-    // 1. THREE.JS SETUP
-    // ==========================================
-    const container = document.getElementById('canvas-container');
-    const scene = new THREE.Scene();
-
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.z = 20; // Position camera far enough to see the hand
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    container.appendChild(renderer.domElement);
-
-    // Add a subtle ambient light and a directional light for better visibility
-    scene.add(new THREE.AmbientLight(0x404040));
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(0, 10, 10);
-    scene.add(directionalLight);
-
-    // --- Hand Object Initialization ---
-    const HAND_GROUP = new THREE.Group();
-    scene.add(HAND_GROUP);
-
-    const SPHERE_COUNT = 21;
-    const sphere_size = 0.5;
-    const spheres = []; // To hold the joint spheres
-    const lines = [];   // To hold the bone lines
-
-    // Material for a glowing, holographic look
-    const sphereMaterial = new THREE.MeshPhongMaterial({
-        color: 0x00ffff,
-        emissive: 0x00ffff,
-        emissiveIntensity: 0.5,
-        shininess: 100
-    });
-    const lineMaterial = new THREE.LineBasicMaterial({
-        color: 0x00ffaa,
-        linewidth: 3 // Note: linewidth is often ignored by WebGLRenderer
-    });
-
-    // Create 21 spheres for the joints (landmarks)
-    for (let i = 0; i < SPHERE_COUNT; i++) {
-        const sphereGeo = new THREE.SphereGeometry(sphere_size, 8, 8);
-        const sphere = new THREE.Mesh(sphereGeo, sphereMaterial.clone());
-        spheres.push(sphere);
-        HAND_GROUP.add(sphere);
-    }
-
-    // Define the bone connections based on MediaPipe hand landmarks (21 points)
-    // Each pair is [start_index, end_index]
-    const CONNECTIONS = [
-        [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
-        [0, 5], [5, 6], [6, 7], [7, 8],       // Index
-        [9, 10], [10, 11], [11, 12],          // Middle
-        [0, 9], [9, 13], [13, 14], [14, 15], [15, 16], // Middle-Ring
-        [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
-    ];
-
-    // Create lines for the bones
-    for (const [start, end] of CONNECTIONS) {
-        // Line will be updated every frame, so we use an empty geometry initially
-        const geometry = new THREE.BufferGeometry();
-        const line = new THREE.Line(geometry, lineMaterial);
-        lines.push({ start: start, end: end, object: line });
-        HAND_GROUP.add(line);
-    }
-
-    // ==========================================
-    // 2. COORDINATE MAPPING
-    // ==========================================
-
-    /* * MediaPipe coordinates are normalized (0 to 1) relative to the video feed.
-     * We need to map them to world space, considering:
-     * 1. X-axis reversal (for mirroring)
-     * 2. Scaling (to make the hand the right size in the 3D world)
-     * 3. Centering (so the hand is near the origin)
-    */
-
-    const SCALE_FACTOR = 40; // Adjust this to change the hand's size
-    const cameraLookAt = new THREE.Vector3(0, 0, 0);
-
-    function mapMediaPipeToThreeJS(landmark) {
-        // x: 1 - landmark.x reverses the X-axis for mirroring
-        // y: (1 - landmark.y) maps the Y axis (0=top in MediaPipe, 0=center in Three.js)
-        // z: landmark.z is the depth, often negative (away from camera)
+    <script id="vertexShader" type="x-shader/x-vertex">
+        uniform float uTime;
+        uniform float uParticleSize;
+        uniform float uSpreadFactor;
+        uniform float uNoiseStrength;
+        uniform float uGlobalScale;
+        uniform float uTemplateMix;
         
-        const x = (1 - landmark.x) * SCALE_FACTOR - (SCALE_FACTOR / 2); // Reverse X and center
-        const y = (1 - landmark.y) * SCALE_FACTOR - (SCALE_FACTOR / 2); // Reverse Y and center
-        const z = landmark.z * SCALE_FACTOR; // Use Z as depth
-
-        return new THREE.Vector3(x, y, z);
-    }
-
-    // ==========================================
-    // 3. MEDIAPIPE HAND TRACKING & UPDATE
-    // ==========================================
-    const videoElement = document.getElementById('input_video');
-    const statusDiv = document.getElementById('status');
-    let landmarkPositions = []; // Array to store calculated 3D positions
-
-    function onResults(results) {
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            statusDiv.innerHTML = `<span class="alert">Tracking Hand: ${results.multiHandedness[0].label}</span>`;
-            
-            const handLandmarks = results.multiHandLandmarks[0];
-            landmarkPositions = [];
-            
-            // 1. Convert all 21 normalized landmarks to Three.js coordinates
-            for (let i = 0; i < SPHERE_COUNT; i++) {
-                const vec3 = mapMediaPipeToThreeJS(handLandmarks[i]);
-                landmarkPositions.push(vec3);
-            }
-
-            // 2. Update the position of all spheres
-            for (let i = 0; i < SPHERE_COUNT; i++) {
-                spheres[i].position.copy(landmarkPositions[i]);
-                // Depth cueing: Make distant spheres slightly smaller
-                // Z is usually negative (closer to camera)
-                spheres[i].scale.setScalar(1 - landmarkPositions[i].z / 40); 
-            }
-
-            // 3. Update the lines (bones)
-            for (const connection of lines) {
-                const startPos = landmarkPositions[connection.start];
-                const endPos = landmarkPositions[connection.end];
-
-                const points = [startPos, endPos];
-                connection.object.geometry.setFromPoints(points);
-            }
+        attribute float aIndex;
+        attribute vec3 aPositionTarget;
+        attribute vec3 aVelocity;
         
-        } else {
-            statusDiv.innerHTML = "No hand detected. <span class='key'>Ensure your hand is clearly visible.</span>";
-            // Hide the hand when not detected
-            HAND_GROUP.visible = false;
+        varying vec4 vColor;
+        
+        // Classic 3D Perlin Noise (Simplified)
+        vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
+        float snoise(vec3 v){
+          const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+          const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+          
+          // First corner
+          vec3 i  = floor(v + dot(v, C.yyy) );
+          vec3 x0 =   v - i + dot(i, C.xxx) ;
+          
+          // Other corners
+          vec3 g = step(x0.yzx, x0.xyz);
+          vec3 l = 1.0 - g;
+          vec3 i1 = min( g.xyz, l.zxy );
+          vec3 i2 = max( g.xyz, l.zxy );
+          
+          vec3 x1 = x0 - i1 + C.xxx;
+          vec3 x2 = x0 - i2 + C.yyy; // 2.0*C.x = 1/3 = C.y
+          vec3 x3 = x0 - D.yyy;      // -1.0+3.0*C.x = -0.5 = -D.y
+          
+          // Permutations
+          i = mod(i, 289.0 );
+          vec4 p = permute( permute( permute( 
+                     i.z + vec3(0.0, i1.z, i2.z ))
+                   + i.y + vec3(0.0, i1.y, i2.y ))
+                   + i.x + vec3(0.0, i1.x, i2.x ));
+          
+          // Gradients: 7/8 of the cube faces
+          float n_ = 1.0/7.0; // 1.0 / 6.0
+          vec3  ns = n_ * D.wyz - D.xzx;
+
+          vec4 j = p - 49.0 * floor(p * ns.z * ns.z);  //  mod(p,7*7)
+          
+          vec4 x_ = floor(j * ns.z);
+          vec4 y_ = floor(j - 7.0 * x_ );    // mod(j,N)
+
+          vec4 x = x_ *ns.x + ns.yyyy;
+          vec4 y = y_ *ns.x + ns.yyyy;
+          vec4 h = 1.0 - abs(x) - abs(y);
+          
+          vec4 b0 = vec4( x.xy, y.xy );
+          vec4 b1 = vec4( x.zw, y.zw );
+          
+          vec4 s0 = floor(b0)*2.0 + 1.0;
+          vec4 s1 = floor(b1)*2.0 + 1.0;
+          vec4 sh = -step(h, vec4(0.0));
+          
+          vec4 a0 = b0.xzyw + s0.xzyw*sh.xzyw;
+          vec4 a1 = b1.xzyw + s1.xzyw*sh.xzyw;
+          
+          vec3 p0 = vec3(a0.xy, h.x);
+          vec3 p1 = vec3(a0.zw, h.y);
+          vec3 p2 = vec3(a1.xy, h.z);
+          vec3 p3 = vec3(a1.zw, h.w);
+          
+          // Normalise gradients
+          vec4 norm = inversesqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+          p0 *= norm.x;
+          p1 *= norm.y;
+          p2 *= norm.z;
+          p3 *= norm.w;
+          
+          // Mix and convert to output value
+          vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+          m = m * m;
+          return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1), 
+                                        dot(p2,x2), dot(p3,x3) ) );
         }
 
-        HAND_GROUP.visible = landmarkPositions.length > 0;
-    }
+        void main() {
+            // Particle Position Logic
+            vec3 finalPosition = position;
 
-    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-    hands.setOptions({ 
-        maxNumHands: 1, // Only track one hand for simplicity
-        modelComplexity: 1, 
-        minDetectionConfidence: 0.7, 
-        minTrackingConfidence: 0.7 
-    });
-    hands.onResults(onResults);
+            // 1. Template Mix: Blend between the initial position and the target position
+            finalPosition = mix(finalPosition, aPositionTarget, uTemplateMix);
 
-    // Setup the camera feed for MediaPipe
-    const cameraUtils = new Camera(videoElement, {
-        onFrame: async () => { await hands.send({image: videoElement}); },
-        width: 640, height: 480 // Higher resolution for better tracking
-    });
-    cameraUtils.start().then(() => {
-        statusDiv.innerText = "Camera Active. Show your hand!";
-    }).catch(err => {
-        statusDiv.innerHTML = `<span class="alert">Error: ${err.name}. Check camera permissions.</span>`;
-    });
+            // 2. Physics / Motion Noise
+            // Use index and time for a unique noise offset per particle
+            float noiseOffset = aIndex * 0.01 + uTime * 0.1;
+            vec3 noise = vec3(
+                snoise(finalPosition * 0.001 + noiseOffset * 0.5),
+                snoise(finalPosition * 0.001 + noiseOffset * 0.5 + 100.0),
+                snoise(finalPosition * 0.001 + noiseOffset * 0.5 + 200.0)
+            );
+            
+            // Apply noise for organic motion
+            finalPosition += noise * uNoiseStrength;
 
-    // ==========================================
-    // 4. ANIMATION LOOP
-    // ==========================================
+            // 3. Spreading / Global Scale
+            // The position is multiplied by uSpreadFactor for expansion (gesture control)
+            finalPosition *= uSpreadFactor;
 
-    function animate() {
-        requestAnimationFrame(animate);
+            // Apply global scale (subtle effect from Z-depth gesture)
+            finalPosition *= uGlobalScale;
 
-        // Optional: Rotate the hand group slightly to simulate hologram effect
-        // HAND_GROUP.rotation.y += 0.005; 
+            // Final projection
+            vec4 mvPosition = modelViewMatrix * vec4(finalPosition, 1.0);
 
-        renderer.render(scene, camera);
-    }
-    animate();
+            // Calculate size based on distance and uniform size
+            gl_PointSize = uParticleSize * (1.0 / -mvPosition.z);
 
-    // Resize Handler
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
+            gl_Position = projectionMatrix * mvPosition;
 
-</script>
+            // Simple coloring based on position (for visual variety)
+            vColor = vec4(normalize(finalPosition * 0.5 + 0.5), 1.0); // Will be modified by uniforms in JS
+        }
+    </script>
+
+    <script id="fragmentShader" type="x-shader/x-fragment">
+        uniform vec3 uColor;
+        uniform sampler2D uTexture;
+        uniform float uOpacity;
+        
+        varying vec4 vColor;
+
+        void main() {
+            // Disk shape with soft edges
+            float r = 0.0, delta = 0.0, alpha = 1.0;
+            vec2 cxy = 2.0 * gl_PointCoord - 1.0;
+            r = dot(cxy, cxy);
+
+            // Fade the edges
+            alpha = smoothstep(1.0, 0.9, r); 
+            
+            // Final color: uniform color * attribute color * alpha from disk shape
+            gl_FragColor = vec4(uColor, alpha * uOpacity);
+            gl_FragColor.rgb *= gl_FragColor.a; // Premultiply alpha
+        }
+    </script>
+
+    <script>
+        // =======================================================================
+        // CORE CONFIGURATION
+        // =======================================================================
+        const MAX_PARTICLES = 100000;
+        const PARTICLE_TEMPLATES = {
+            HEARTS: 'hearts',
+            FLOWERS: 'flowers',
+            SATURN: 'saturn',
+            BUDDHA: 'buddha',
+            FIREWORKS: 'fireworks'
+        };
+
+        const STATE = {
+            template: PARTICLE_TEMPLATES.HEARTS,
+            count: 50000,
+            color: '#0096ff',
+            size: 1.5,
+            noiseStrength: 0.2,
+            gestureControl: true,
+            spreadFactor: 1.0,  // Controlled by hands opening/closing
+            globalScale: 1.0,   // Controlled by hands Z-depth
+            templateMix: 1.0    // Used for smooth transition
+        };
+
+        // =======================================================================
+        // THREE.JS SETUP
+        // =======================================================================
+        let scene, camera, renderer, clock;
+        let particles, geometry, material, uniforms;
+        let video, controls;
+
+        // Use requestAnimationFrame for smooth parameter updates
+        let targetSpread = STATE.spreadFactor;
+        let targetGlobalScale = STATE.globalScale;
+        let targetTemplateMix = STATE.templateMix;
+        const LERP_FACTOR = 0.05; // Smoothing factor for transitions
+
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.Fog(0x1a1a1a, 100, 1500);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.z = 100;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio > 1 ? 2 : 1);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            clock = new THREE.Clock();
+
+            createParticles();
+            initUI();
+            
+            // Fallback: OrbitControls for manual camera rotation
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.enableZoom = false; // Zoom is handled by globalScale/spread
+
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('wheel', onMouseWheel, false);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onMouseWheel(event) {
+            // Manual fallback for spread/scale control
+            if (!STATE.gestureControl) {
+                // Adjust spreadFactor based on scroll direction
+                targetSpread = THREE.MathUtils.clamp(targetSpread - event.deltaY * 0.001, 0.1, 5.0);
+                event.preventDefault();
+            }
+        }
+
+
+        // =======================================================================
+        // PARTICLE GENERATION & TEMPLATES
+        // =======================================================================
+
+        /**
+         * Generates a template of target positions (aPositionTarget) based on the current template type.
+         * @param {number} count - The number of particles to generate.
+         * @returns {Float32Array} - The array of new target positions (3 * count elements).
+         */
+        function generateTargetPositions(count) {
+            const positions = new Float32Array(count * 3);
+            const scale = 30.0; 
+
+            for (let i = 0; i < count; i++) {
+                const i3 = i * 3;
+                let x = 0, y = 0, z = 0;
+
+                switch (STATE.template) {
+                    case PARTICLE_TEMPLATES.HEARTS:
+                        // Heart shape (simplified cardioid)
+                        const t_heart = (i / count) * Math.PI * 2;
+                        x = 16 * Math.pow(Math.sin(t_heart), 3) * 0.8;
+                        y = (13 * Math.cos(t_heart) - 5 * Math.cos(2 * t_heart) - 2 * Math.cos(3 * t_heart) - Math.cos(4 * t_heart)) * 0.8;
+                        z = (Math.random() - 0.5) * 5; // Slight Z-depth
+                        break;
+                    
+                    case PARTICLE_TEMPLATES.FLOWERS:
+                        // Simple spiral/petal shape (2D)
+                        const angle_flower = i * 0.1;
+                        const radius_flower = Math.sqrt(i) * 0.5;
+                        x = Math.cos(angle_flower) * radius_flower;
+                        y = Math.sin(angle_flower) * radius_flower;
+                        z = Math.sin(radius_flower * 0.5) * 5;
+                        break;
+
+                    case PARTICLE_TEMPLATES.SATURN:
+                        // Sphere for the planet, and a thin ring
+                        if (i < count * 0.5) {
+                            // Sphere (Planet)
+                            const r = Math.acos((Math.random() * 2) - 1);
+                            const t = Math.random() * Math.PI * 2;
+                            x = Math.cos(t) * Math.sin(r) * 10;
+                            y = Math.sin(t) * Math.sin(r) * 10;
+                            z = Math.cos(r) * 10;
+                        } else {
+                            // Ring
+                            const r_ring = THREE.MathUtils.randFloat(12, 20);
+                            const t_ring = Math.random() * Math.PI * 2;
+                            x = Math.cos(t_ring) * r_ring;
+                            y = (Math.random() - 0.5) * 1.5; // Flat Y
+                            z = Math.sin(t_ring) * r_ring;
+                        }
+                        break;
+
+                    case PARTICLE_TEMPLATES.BUDDHA:
+                        // Placeholder: simple vertical Gaussian cluster
+                        x = THREE.MathUtils.randGaussian() * 3;
+                        y = THREE.MathUtils.randGaussian() * 15;
+                        z = THREE.MathUtils.randGaussian() * 3;
+                        break;
+
+                    case PARTICLE_TEMPLATES.FIREWORKS:
+                        // Start in a tight cluster (will be animated in the update loop)
+                        x = THREE.MathUtils.randFloatSpread(5);
+                        y = THREE.MathUtils.randFloatSpread(5);
+                        z = THREE.MathUtils.randFloatSpread(5);
+                        break;
+                        
+                    default:
+                        // Default: Simple Cube/Random Spread
+                        x = THREE.MathUtils.randFloatSpread(scale);
+                        y = THREE.MathUtils.randFloatSpread(scale);
+                        z = THREE.MathUtils.randFloatSpread(scale);
+                        break;
+                }
+                
+                positions[i3] = x * scale * 0.5;
+                positions[i3 + 1] = y * scale * 0.5;
+                positions[i3 + 2] = z * scale * 0.5;
+            }
+
+            return positions;
+        }
+
+        function createParticles() {
+            if (particles) {
+                scene.remove(particles);
+                geometry.dispose();
+                material.dispose();
+            }
+            
+            const count = Math.min(MAX_PARTICLES, STATE.count);
+
+            geometry = new THREE.BufferGeometry();
+            
+            // Attributes (100k particles)
+            const initialPositions = new Float32Array(count * 3);
+            const aIndex = new Float32Array(count);
+            
+            // Random initial spread for the start
+            for (let i = 0; i < count; i++) {
+                const i3 = i * 3;
+                initialPositions[i3] = THREE.MathUtils.randFloatSpread(200);
+                initialPositions[i3 + 1] = THREE.MathUtils.randFloatSpread(200);
+                initialPositions[i3 + 2] = THREE.MathUtils.randFloatSpread(200);
+                aIndex[i] = i;
+            }
+
+            // Target positions are the shaped positions
+            const aPositionTarget = generateTargetPositions(count);
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(initialPositions, 3));
+            geometry.setAttribute('aPositionTarget', new THREE.BufferAttribute(aPositionTarget, 3));
+            geometry.setAttribute('aIndex', new THREE.BufferAttribute(aIndex, 1));
+            
+            // GLSL Uniforms
+            uniforms = {
+                uTime: { value: 0 },
+                uParticleSize: { value: STATE.size },
+                uSpreadFactor: { value: STATE.spreadFactor },
+                uNoiseStrength: { value: STATE.noiseStrength },
+                uGlobalScale: { value: STATE.globalScale },
+                uTemplateMix: { value: STATE.templateMix },
+                uColor: { value: new THREE.Color(STATE.color) },
+                uOpacity: { value: 0.9 },
+                uTexture: { value: null } // Placeholder for custom texture if needed
+            };
+
+            material = new THREE.ShaderMaterial({
+                uniforms: uniforms,
+                vertexShader: document.getElementById('vertexShader').textContent,
+                fragmentShader: document.getElementById('fragmentShader').textContent,
+                transparent: true,
+                depthWrite: false, // Critical for particle blending
+                blending: THREE.AdditiveBlending // Good for glowing effects
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+
+            // Set current state values to uniforms
+            material.uniforms.uParticleSize.value = STATE.size;
+            material.uniforms.uNoiseStrength.value = STATE.noiseStrength;
+            material.uniforms.uColor.value.set(STATE.color);
+        }
+        
+        // This function is called when a new template is selected
+        function transitionToTemplate(newTemplate) {
+            if (STATE.template === newTemplate) return;
+
+            // 1. Start transition mix to 0 (initial position)
+            targetTemplateMix = 0.0; 
+
+            // 2. Wait a moment, then update the target positions 
+            //    This is where we *could* add a sophisticated tweening library (like TweenMax)
+            setTimeout(() => {
+                STATE.template = newTemplate;
+                const count = geometry.attributes.position.count;
+                const newTargets = generateTargetPositions(count);
+                
+                // Update the aPositionTarget attribute
+                geometry.setAttribute('aPositionTarget', new THREE.BufferAttribute(newTargets, 3));
+                geometry.attributes.aPositionTarget.needsUpdate = true;
+
+                // 3. Immediately set the targetMix back to 1.0 (new shape)
+                targetTemplateMix = 1.0; 
+            }, 200); // 200ms delay to allow particles to contract
+            
+            // Special handling for the Fireworks snap
+            if (newTemplate === PARTICLE_TEMPLATES.FIREWORKS) {
+                // Instantly re-randomize initial positions for a burst effect
+                 const initialPositions = geometry.attributes.position.array;
+                 for (let i = 0; i < initialPositions.length / 3; i++) {
+                     initialPositions[i * 3] = THREE.MathUtils.randFloatSpread(5);
+                     initialPositions[i * 3 + 1] = THREE.MathUtils.randFloatSpread(5);
+                     initialPositions[i * 3 + 2] = THREE.MathUtils.randFloatSpread(5);
+                 }
+                 geometry.attributes.position.needsUpdate = true;
+            }
+        }
+
+
+        // =======================================================================
+        // GESTURE & HAND POSE DETECTION LOGIC (Placeholder)
+        // =======================================================================
+        let handposeModel = null;
+        let videoStream = null;
+        let lastDetectionTime = 0;
+        const GESTURE_INTERVAL = 50; // Target 20 FPS for ML inference
+
+        async function initCameraAndModel() {
+            video = document.getElementById('video-feed');
+            const debugEl = document.getElementById('gesture-debug');
+
+            // --- 1. Get Camera Permission ---
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                video.srcObject = videoStream;
+                video.onloadeddata = () => {
+                    video.play();
+                    debugEl.innerText = "Gesture Status: Loading Hand Model...";
+                    
+                    // --- 2. Load ML Model (This needs the uncommented script tags) ---
+                    // NOTE: The actual loading must be implemented here using tf.js/handpose
+                    // Placeholder for model loading:
+                    // handposeModel = await handpose.load(); 
+                    handposeModel = { predict: async () => [] }; // Mock model for structural completeness
+
+                    debugEl.innerText = "Gesture Status: Ready. Show hands to camera.";
+                    requestAnimationFrame(detectHandLoop);
+                };
+
+            } catch (err) {
+                console.error("Could not access the camera: ", err);
+                debugEl.innerText = "Gesture Status: Camera access denied or failed. Using Mouse Fallback.";
+                STATE.gestureControl = false;
+            }
+        }
+
+        async function detectHandLoop() {
+            if (!handposeModel || !STATE.gestureControl) {
+                requestAnimationFrame(detectHandLoop);
+                return;
+            }
+
+            const now = performance.now();
+            if (now - lastDetectionTime < GESTURE_INTERVAL) {
+                requestAnimationFrame(detectHandLoop);
+                return;
+            }
+            lastDetectionTime = now;
+
+            // --- 3. Actual Detection (Placeholder for ML execution) ---
+            // In a real implementation, you would call: 
+            // const predictions = await handposeModel.estimateHands(video);
+            
+            const predictions = []; // Mock predictions for now
+
+            updateParticleParametersFromGesture(predictions);
+
+            requestAnimationFrame(detectHandLoop);
+        }
+        
+        let lastHandDistance = 0;
+
+        /**
+         * Maps hand predictions to particle parameters.
+         * This function needs the real output from the ML model.
+         * @param {Array} hands - Array of hand objects from the ML model.
+         */
+        function updateParticleParametersFromGesture(hands) {
+            if (hands.length === 0) {
+                document.getElementById('gesture-debug').innerText = "Gesture Status: Hand not detected.";
+                return;
+            }
+
+            // Simple single-hand model for tension (fist vs open)
+            const hand = hands[0]; 
+            const palm = hand.landmarks[0]; // Wrist point
+            const thumbTip = hand.landmarks[4];
+            const pinkyTip = hand.landmarks[20];
+
+            // 1. Hand Tension / Spread (Distance between thumb and pinky tips)
+            const tensionDistance = Math.hypot(thumbTip[0] - pinkyTip[0], thumbTip[1] - pinkyTip[1]);
+            
+            // Map distance to spreadFactor (1.0 is neutral, 0.1 is fist, 3.0 is wide open)
+            // NOTE: These thresholds (10-150) are highly dependent on the model/camera resolution
+            const normalizedTension = THREE.MathUtils.clamp(THREE.MathUtils.mapLinear(tensionDistance, 10, 150, 0.1, 3.0), 0.5, 3.0);
+            targetSpread = normalizedTension;
+
+            // 2. Global Scale (Distance of hand from camera/center Z-depth)
+            // Use the Z coordinate of the wrist (z is depth, smaller z means closer to camera)
+            const wristZ = palm[2]; 
+            
+            // Map Z to globalScale (Closer hand = smaller scale)
+            // NOTE: -30 to 30 are typical relative Z-values from ML models
+            const normalizedZ = THREE.MathUtils.clamp(THREE.MathUtils.mapLinear(wristZ, -30, 30, 1.3, 0.7), 0.7, 1.3);
+            targetGlobalScale = normalizedZ;
+
+            // 3. Fireworks Snap/Clap Detection (Needs two hands, or a fast single-hand closing)
+            // If two hands are present, calculate the distance between them.
+            if (hands.length >= 2) {
+                const palm1 = hands[0].landmarks[0];
+                const palm2 = hands[1].landmarks[0];
+                const handDistance = Math.hypot(palm1[0] - palm2[0], palm1[1] - palm2[1]);
+                
+                // Detect a quick closing motion (snap/clap)
+                if (lastHandDistance > 0 && lastHandDistance - handDistance > 50) { // 50 pixel closing change
+                    if (STATE.template !== PARTICLE_TEMPLATES.FIREWORKS) {
+                        transitionToTemplate(PARTICLE_TEMPLATES.FIREWORKS);
+                    }
+                }
+                lastHandDistance = handDistance;
+            }
+            
+            document.getElementById('gesture-debug').innerText = `Gesture Status: Live | Spread: ${targetSpread.toFixed(2)} | Scale: ${targetGlobalScale.toFixed(2)}`;
+        }
+
+
+        // =======================================================================
+        // ANIMATION LOOP & RENDER
+        // =======================================================================
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            uniforms.uTime.value += delta;
+            
+            // Smoothly transition parameters (LERP)
+            STATE.spreadFactor = THREE.MathUtils.lerp(STATE.spreadFactor, targetSpread, LERP_FACTOR);
+            STATE.globalScale = THREE.MathUtils.lerp(STATE.globalScale, targetGlobalScale, LERP_FACTOR);
+            STATE.templateMix = THREE.MathUtils.lerp(STATE.templateMix, targetTemplateMix, LERP_FACTOR);
+            
+            // Update uniforms
+            uniforms.uSpreadFactor.value = STATE.spreadFactor;
+            uniforms.uGlobalScale.value = STATE.globalScale;
+            uniforms.uTemplateMix.value = STATE.templateMix;
+
+            // Update OrbitControls
+            controls.update();
+
+            renderer.render(scene, camera);
+        }
+
+
+        // =======================================================================
+        // UI (LIL-GUI) SETUP
+        // =======================================================================
+
+        function initUI() {
+            const gui = new lil.GUI({ title: 'Particle Controls', width: 280 });
+            gui.domElement.style.userSelect = 'none';
+
+            // --- TEMPLATE SELECTION ---
+            const templateFolder = gui.addFolder('Templates');
+            templateFolder.open();
+
+            const templateContainer = document.createElement('div');
+            templateContainer.className = 'template-selector';
+            
+            const templateIcons = {
+                [PARTICLE_TEMPLATES.HEARTS]: '💖',
+                [PARTICLE_TEMPLATES.FLOWERS]: '🌸',
+                [PARTICLE_TEMPLATES.SATURN]: '🪐',
+                [PARTICLE_TEMPLATES.BUDDHA]: '🧘',
+                [PARTICLE_TEMPLATES.FIREWORKS]: '🎆'
+            };
+
+            Object.entries(templateIcons).forEach(([key, icon]) => {
+                const div = document.createElement('div');
+                div.className = 'template-icon';
+                div.innerHTML = icon;
+                div.setAttribute('data-template', key);
+                div.title = key;
+                
+                if (key === STATE.template) div.classList.add('active');
+
+                div.onclick = () => {
+                    document.querySelectorAll('.template-icon').forEach(el => el.classList.remove('active'));
+                    div.classList.add('active');
+                    transitionToTemplate(key);
+                };
+                templateContainer.appendChild(div);
+            });
+
+            templateFolder.add(templateContainer, 'Template Selector'); // Custom UI element
+
+            // --- CORE PARAMETERS ---
+            const paramsFolder = gui.addFolder('Parameters');
+            paramsFolder.open();
+            
+            paramsFolder.addColor(STATE, 'color').onChange(value => {
+                uniforms.uColor.value.set(value);
+            });
+            
+            paramsFolder.add(STATE, 'size', 0.5, 5.0, 0.1).name('Particle Size').onChange(value => {
+                uniforms.uParticleSize.value = value;
+            });
+
+            paramsFolder.add(STATE, 'noiseStrength', 0.0, 1.0, 0.01).name('Motion Noise').onChange(value => {
+                uniforms.uNoiseStrength.value = value;
+            });
+
+            paramsFolder.add(STATE, 'count', 1000, MAX_PARTICLES, 1000).name('Particle Count').onChange(value => {
+                // Must recreate the entire geometry to change particle count
+                STATE.count = value;
+                createParticles();
+            }).listen(); // Listen because it might be adjusted for performance fallback
+
+            // --- CONTROLS ---
+            const controlFolder = gui.addFolder('Controls');
+            controlFolder.open();
+
+            controlFolder.add(STATE, 'gestureControl').name('Enable Gesture Control').onChange(value => {
+                if (value && !videoStream) {
+                    // Try to re-initialize camera if enabled
+                    initCameraAndModel();
+                }
+            });
+
+            controlFolder.add(STATE, 'spreadFactor', 0.1, 5.0, 0.01).name('Manual Spread').listen().onChange(value => {
+                if (!STATE.gestureControl) targetSpread = value;
+            });
+            
+            controlFolder.add(STATE, 'globalScale', 0.5, 1.5, 0.01).name('Manual Scale').listen().onChange(value => {
+                if (!STATE.gestureControl) targetGlobalScale = value;
+            });
+        }
+
+
+        // =======================================================================
+        // STARTUP
+        // =======================================================================
+        initThreeJS();
+        initCameraAndModel(); // Start camera setup
+        animate();
+
+    </script>
 </body>
 </html>
