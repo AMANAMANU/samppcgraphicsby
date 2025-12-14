@@ -3,68 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gesture Controlled Solar System</title>
+    <title>Solar System - Earth Focus</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
         #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
         
-        /* The webcam feed (mirrored for natural interaction) */
         #input_video { 
-            position: absolute; 
-            bottom: 20px; 
-            right: 20px; 
-            width: 240px; 
-            height: 180px; 
-            z-index: 2; 
+            position: absolute; bottom: 20px; right: 20px; 
+            width: 240px; height: 180px; z-index: 2; 
             border: 2px solid rgba(255,255,255,0.3); 
             border-radius: 10px;
-            transform: scaleX(-1); /* Mirror the video */
-            opacity: 0.7;
-        }
-
-        #loading {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; font-size: 24px; pointer-events: none; z-index: 10;
+            transform: scaleX(-1); opacity: 0.7;
         }
 
         #ui-layer {
             position: absolute; top: 20px; left: 20px; z-index: 5;
             color: rgba(255, 255, 255, 0.8);
-            background: rgba(0, 0, 0, 0.5);
-            padding: 15px;
-            border-radius: 8px;
-            pointer-events: none;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px; border-radius: 8px; pointer-events: none;
         }
         h1 { margin: 0 0 10px 0; font-size: 1.2rem; color: #ffcc00; }
         p { margin: 5px 0; font-size: 0.9rem; }
         .key { font-weight: bold; color: #00ffff; }
+        .alert { color: #ff4444; font-weight: bold; }
     </style>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
-    <div id="loading">Initializing Neural Networks...</div>
-    
     <div id="ui-layer">
-        <h1>Solar Hand Control</h1>
-        <p><span class="key">1 Hand (Open):</span> Move to Rotate View</p>
-        <p><span class="key">1 Hand (Fist):</span> Change Particle Color</p>
-        <p><span class="key">2 Hands:</span> Spread to Zoom In/Out</p>
-        <p><i>Status: <span id="status">Waiting for camera...</span></i></p>
+        <h1>Solar Gesture Control</h1>
+        <p><span class="key">☝️ Index Finger:</span> Toggle Earth/Sun View</p>
+        <p><span class="key">✊ Fist:</span> Change Colors</p>
+        <p><span class="key">✋ Open Hand:</span> Rotate Camera</p>
+        <p><span class="key">👐 Two Hands:</span> Zoom</p>
+        <p><i>Current Focus: <span id="focus-status" style="color:yellow">SUN</span></i></p>
     </div>
 
     <video id="input_video" autoplay playsinline></video>
-    
     <div id="canvas-container"></div>
 
 <script>
     // ==========================================
-    // 1. THREE.JS SETUP (The Solar System)
+    // 1. THREE.JS SETUP
     // ==========================================
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
@@ -75,276 +60,232 @@
     camera.position.y = 100;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
-    // --- Create Particles ---
-    // Helper to create a glowing texture
-    function createTexture() {
-        const canvas = document.createElement('canvas');
-        canvas.width = 32; canvas.height = 32;
-        const context = canvas.getContext('2d');
-        const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
-        gradient.addColorStop(0, 'rgba(255,255,255,1)');
-        gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
-        gradient.addColorStop(0.5, 'rgba(255,255,255,0.2)');
-        gradient.addColorStop(1, 'rgba(0,0,0,0)');
-        context.fillStyle = gradient;
-        context.fillRect(0, 0, 32, 32);
-        const texture = new THREE.Texture(canvas);
-        texture.needsUpdate = true;
-        return texture;
-    }
-
-    const particleCount = 2000;
-    const geometry = new THREE.BufferGeometry();
-    const positions = [];
-    const colors = [];
-    const sizes = [];
-    const orbitData = []; // Store angle and speed for animation
-
-    const color1 = new THREE.Color(0xffaa33); // Inner
-    const color2 = new THREE.Color(0x3366ff); // Outer
-
-    for (let i = 0; i < particleCount; i++) {
-        // Spiral galaxy distribution
-        const angle = Math.random() * Math.PI * 2;
-        const radius = 50 + Math.random() * 400; // Distance from sun
-        const drift = (Math.random() - 0.5) * 40; // Height variation
-
-        const x = Math.cos(angle) * radius;
-        const y = drift;
-        const z = Math.sin(angle) * radius;
-
-        positions.push(x, y, z);
-
-        // Store orbit data
-        orbitData.push({
-            radius: radius,
-            angle: angle,
-            speed: (10 / radius) * (Math.random() * 0.5 + 0.5), // Closer moves faster
-            yOffset: drift
-        });
-
-        // Color mix based on radius
-        const mixedColor = color1.clone().lerp(color2, radius / 400);
-        colors.push(mixedColor.r, mixedColor.g, mixedColor.b);
-        sizes.push(4 + Math.random() * 5);
-    }
-
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
-
-    const material = new THREE.PointsMaterial({
-        size: 5,
-        vertexColors: true,
-        map: createTexture(),
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        transparent: true
-    });
-
-    const system = new THREE.Points(geometry, material);
-    scene.add(system);
-
-    // Add a central Sun
-    const sunGeo = new THREE.SphereGeometry(20, 32, 32);
+    // --- SUN ---
+    const sunGeo = new THREE.SphereGeometry(25, 32, 32);
     const sunMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
     const sun = new THREE.Mesh(sunGeo, sunMat);
     scene.add(sun);
     
-    // Sun Glow
-    const sunGlowGeo = new THREE.SpriteMaterial({ 
-        map: createTexture(), 
-        color: 0xff4400, 
-        transparent: true, 
-        blending: THREE.AdditiveBlending 
-    });
-    const sunGlow = new THREE.Sprite(sunGlowGeo);
-    sunGlow.scale.set(100, 100, 1.0);
+    // Sun Glow Sprite
+    const canvas = document.createElement('canvas');
+    canvas.width = 32; canvas.height = 32;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad; ctx.fillRect(0,0,32,32);
+    const glowTex = new THREE.Texture(canvas); glowTex.needsUpdate = true;
+    
+    const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: 0xff4400, blending: THREE.AdditiveBlending }));
+    sunGlow.scale.set(120, 120, 1);
     scene.add(sunGlow);
 
+    // --- EARTH ---
+    const earthGroup = new THREE.Group(); // Pivot point for orbit
+    scene.add(earthGroup);
+
+    const earthGeo = new THREE.SphereGeometry(10, 32, 32);
+    const earthMat = new THREE.MeshPhongMaterial({ color: 0x2233ff, emissive: 0x112244 });
+    const earth = new THREE.Mesh(earthGeo, earthMat);
+    earth.position.set(150, 0, 0); // Distance from Sun
+    earthGroup.add(earth);
+
+    // Earth Trail/Orbit Line
+    const orbitCurve = new THREE.EllipseCurve(0, 0, 150, 150, 0, 2 * Math.PI, false, 0);
+    const orbitPoints = orbitCurve.getPoints(100);
+    const orbitGeo = new THREE.BufferGeometry().setFromPoints(orbitPoints);
+    const orbitMat = new THREE.LineBasicMaterial({ color: 0x4444ff, opacity: 0.3, transparent: true });
+    const orbitLine = new THREE.Line(orbitGeo, orbitMat);
+    orbitLine.rotation.x = Math.PI / 2;
+    scene.add(orbitLine);
+
+    // Lighting for Earth
+    const light = new THREE.PointLight(0xffffff, 1.5, 500);
+    scene.add(light); // Sun light
+
+    // --- PARTICLES ---
+    const particlesGeo = new THREE.BufferGeometry();
+    const count = 1500;
+    const posArray = new Float32Array(count * 3);
+    const colArray = new Float32Array(count * 3);
+    const orbitData = [];
+
+    const c1 = new THREE.Color(0xffaa33);
+    const c2 = new THREE.Color(0x3366ff);
+
+    for(let i=0; i<count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const r = 60 + Math.random() * 400;
+        const x = Math.cos(angle) * r;
+        const z = Math.sin(angle) * r;
+        const y = (Math.random() - 0.5) * 30;
+        
+        posArray[i*3] = x; posArray[i*3+1] = y; posArray[i*3+2] = z;
+        
+        orbitData.push({ r: r, angle: angle, speed: (10/r) * 0.5, y: y });
+
+        const mixed = c1.clone().lerp(c2, r/400);
+        colArray[i*3] = mixed.r; colArray[i*3+1] = mixed.g; colArray[i*3+2] = mixed.b;
+    }
+    particlesGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+    particlesGeo.setAttribute('color', new THREE.BufferAttribute(colArray, 3));
+
+    const particles = new THREE.Points(particlesGeo, new THREE.PointsMaterial({
+        size: 3, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true
+    }));
+    scene.add(particles);
 
     // ==========================================
-    // 2. STATE MANAGEMENT & LOGIC
+    // 2. LOGIC & STATE
     // ==========================================
     const state = {
-        targetRotationX: 0,
-        targetRotationY: 0,
-        currentRotationX: 0,
-        currentRotationY: 0,
-        zoom: 500,
-        targetZoom: 500,
-        colorHue: 0,
-        isFist: false,
-        lastFistTime: 0
+        targetRotX: 0, targetRotY: 0,
+        currRotX: 0, currRotY: 0,
+        zoom: 400, targetZoom: 400,
+        
+        focusTarget: 'sun', // 'sun' or 'earth'
+        lastToggleTime: 0,
+        
+        cameraLookAt: new THREE.Vector3(0,0,0), // Interpolated lookAt
+        earthAngle: 0
     };
 
-    function changeColors() {
+    const focusText = document.getElementById('focus-status');
+
+    function toggleFocus() {
         const now = Date.now();
-        // Debounce color change (prevent rapid flickering)
-        if (now - state.lastFistTime > 500) {
-            state.lastFistTime = now;
+        if (now - state.lastToggleTime > 1000) { // 1 second cooldown
+            state.lastToggleTime = now;
+            state.focusTarget = (state.focusTarget === 'sun') ? 'earth' : 'sun';
             
-            // Generate random colors
-            const c1 = new THREE.Color().setHSL(Math.random(), 1, 0.5);
-            const c2 = new THREE.Color().setHSL(Math.random(), 1, 0.5);
+            focusText.innerText = state.focusTarget.toUpperCase();
+            focusText.style.color = state.focusTarget === 'sun' ? 'yellow' : 'cyan';
             
-            const cols = geometry.attributes.color.array;
-            
-            for (let i = 0; i < particleCount; i++) {
-                const radius = orbitData[i].radius;
-                // Lerp new colors
-                const mixed = c1.clone().lerp(c2, radius / 400);
-                cols[i * 3] = mixed.r;
-                cols[i * 3 + 1] = mixed.g;
-                cols[i * 3 + 2] = mixed.b;
-            }
-            geometry.attributes.color.needsUpdate = true;
-            
-            sunMat.color.setHSL(Math.random(), 1, 0.5);
-            sunGlow.material.color.setHSL(Math.random(), 1, 0.5);
+            // Adjust zoom for better view automatically
+            state.targetZoom = state.focusTarget === 'earth' ? 80 : 400; 
         }
     }
 
+    function randomizeColors() {
+        if(Date.now() - state.lastToggleTime < 500) return; // Share debounce
+        const r1 = Math.random(), r2 = Math.random();
+        const colors = particles.geometry.attributes.color.array;
+        const _c1 = new THREE.Color().setHSL(r1, 1, 0.5);
+        const _c2 = new THREE.Color().setHSL(r2, 1, 0.5);
+        
+        for(let i=0; i<count; i++) {
+            const mixed = _c1.clone().lerp(_c2, orbitData[i].r/400);
+            colors[i*3] = mixed.r; colors[i*3+1] = mixed.g; colors[i*3+2] = mixed.b;
+        }
+        particles.geometry.attributes.color.needsUpdate = true;
+    }
+
     // ==========================================
-    // 3. MEDIAPIPE HAND TRACKING
+    // 3. HAND TRACKING
     // ==========================================
     const videoElement = document.getElementById('input_video');
-    const statusText = document.getElementById('status');
-    const loadingDiv = document.getElementById('loading');
 
     function onResults(results) {
-        loadingDiv.style.display = 'none';
-        
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            statusText.innerText = `Hands Detected: ${results.multiHandLandmarks.length}`;
-            statusText.style.color = '#00ff00';
+        if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) return;
 
-            const hand1 = results.multiHandLandmarks[0];
-            const hand2 = results.multiHandLandmarks.length > 1 ? results.multiHandLandmarks[1] : null;
+        const h1 = results.multiHandLandmarks[0];
+        const h2 = results.multiHandLandmarks.length > 1 ? results.multiHandLandmarks[1] : null;
 
-            // --- Logic for 2 Hands: ZOOM ---
-            if (hand2) {
-                // Calculate distance between the wrists (landmark 0) or index fingers (landmark 8)
-                const dx = hand1[0].x - hand2[0].x;
-                const dy = hand1[0].y - hand2[0].y;
-                const distance = Math.sqrt(dx*dx + dy*dy);
-                
-                // Map distance to zoom (Inverted: hands apart = closer zoom)
-                // Distance usually 0.2 to 0.8
-                const zoomFactor = 1000 - (distance * 1000); 
-                state.targetZoom = Math.max(100, Math.min(1200, zoomFactor));
-            } 
+        // --- 2 Hands: ZOOM ---
+        if (h2) {
+            const d = Math.hypot(h1[0].x - h2[0].x, h1[0].y - h2[0].y);
+            // Inverted: hands apart (d=0.8) -> zoom=100, hands close (d=0.1) -> zoom=800
+            const z = 800 - (d * 800);
+            state.targetZoom = Math.max(50, Math.min(1000, z));
+        } 
+        else {
+            // --- 1 Hand Logic ---
             
-            // --- Logic for 1 Hand: ROTATE & COLOR ---
-            else {
-                // 1. ROTATION (Based on Palm Position - Landmark 9)
-                const x = hand1[9].x; // 0.0 to 1.0
-                const y = hand1[9].y; // 0.0 to 1.0
-                
-                // Map 0-1 to rotation angles
-                // Center (0.5) is 0 rotation.
-                state.targetRotationY = (x - 0.5) * 4; // Horizontal movement rotates Y
-                state.targetRotationX = (y - 0.5) * 2; // Vertical movement rotates X
+            // Check Fingers (Tip y < PIP y means finger is extended UP in screen space)
+            // Note: y=0 is top, y=1 is bottom. So Small Y is UP.
+            const indexUp = h1[8].y < h1[6].y;
+            const middleClosed = h1[12].y > h1[10].y;
+            const ringClosed = h1[16].y > h1[14].y;
+            const pinkyClosed = h1[20].y > h1[18].y;
 
-                // 2. GESTURE DETECTION (Fist)
-                // Check if fingertips (8, 12, 16, 20) are below finger PIP joints (6, 10, 14, 18)
-                // Note: Y coordinates increase downwards
-                const isFist = (
-                    hand1[8].y > hand1[6].y && 
-                    hand1[12].y > hand1[10].y && 
-                    hand1[16].y > hand1[14].y && 
-                    hand1[20].y > hand1[18].y
-                );
-
-                if (isFist) {
-                    changeColors();
-                }
+            // GESTURE: Pointing Up (Index only)
+            if (indexUp && middleClosed && ringClosed && pinkyClosed) {
+                toggleFocus();
             }
-        } else {
-            statusText.innerText = "No hands detected";
-            statusText.style.color = '#ffff00';
-            // Slowly return to default rotation if no hands
-            state.targetRotationX = state.targetRotationX * 0.95;
-            state.targetRotationY = state.targetRotationY * 0.95;
+            // GESTURE: Fist (All closed)
+            else if (!indexUp && middleClosed && ringClosed && pinkyClosed) {
+                randomizeColors();
+            }
+            // GESTURE: Open Hand (Rotate)
+            else {
+                // Center is 0.5
+                state.targetRotY = (h1[9].x - 0.5) * 5; 
+                state.targetRotX = (h1[9].y - 0.5) * 3;
+            }
         }
     }
 
-    const hands = new Hands({locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-    }});
-
-    hands.setOptions({
-        maxNumHands: 2,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-    });
-
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
     hands.onResults(onResults);
 
     const cameraUtils = new Camera(videoElement, {
-        onFrame: async () => {
-            await hands.send({image: videoElement});
-        },
-        width: 320,
-        height: 240
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 320, height: 240
     });
     cameraUtils.start();
 
-
     // ==========================================
-    // 4. ANIMATION LOOP
+    // 4. ANIMATION
     // ==========================================
-    
     function animate() {
         requestAnimationFrame(animate);
 
-        // --- Smooth Camera Movement (LERP) ---
-        state.currentRotationX += (state.targetRotationX - state.currentRotationX) * 0.05;
-        state.currentRotationY += (state.targetRotationY - state.currentRotationY) * 0.05;
+        // 1. Move Earth
+        state.earthAngle += 0.005; // Orbit speed
+        earth.position.x = Math.cos(state.earthAngle) * 150;
+        earth.position.z = Math.sin(state.earthAngle) * 150;
+        earth.rotation.y += 0.02; // Earth spin
+
+        // 2. Camera Controls Smoothing
+        state.currRotX += (state.targetRotX - state.currRotX) * 0.05;
+        state.currRotY += (state.targetRotY - state.currRotY) * 0.05;
         state.zoom += (state.targetZoom - state.zoom) * 0.05;
 
-        // Convert spherical coords to cartesian
+        // 3. Determine Focus Point (Lerp for smooth transition)
+        const targetVec = (state.focusTarget === 'earth') ? earth.position : new THREE.Vector3(0,0,0);
+        state.cameraLookAt.lerp(targetVec, 0.05);
+
+        // 4. Calculate Camera Position
+        // We orbit around the *current focus point*
         const r = state.zoom;
-        const theta = state.currentRotationY; 
-        const phi = state.currentRotationX;
+        const theta = state.currRotY;
+        const phi = state.currRotX;
 
-        camera.position.x = r * Math.sin(theta);
-        camera.position.z = r * Math.cos(theta);
-        camera.position.y = r * Math.sin(phi);
-        
-        camera.lookAt(scene.position);
+        // Basic orbital math relative to the lookAt target
+        camera.position.x = state.cameraLookAt.x + r * Math.sin(theta);
+        camera.position.y = state.cameraLookAt.y + r * Math.sin(phi);
+        camera.position.z = state.cameraLookAt.z + r * Math.cos(theta);
 
-        // --- Particle Animation (Orbit) ---
-        const positions = geometry.attributes.position.array;
-        
-        for (let i = 0; i < particleCount; i++) {
+        camera.lookAt(state.cameraLookAt);
+
+        // 5. Particles
+        const positions = particles.geometry.attributes.position.array;
+        for(let i=0; i<count; i++){
             const d = orbitData[i];
-            
-            // Update angle
-            d.angle += d.speed * 0.001;
-
-            // Recalculate X/Z
-            positions[i * 3] = Math.cos(d.angle) * d.radius;
-            positions[i * 3 + 2] = Math.sin(d.angle) * d.radius;
-            // Y stays mostly the same with slight wobble
-            positions[i * 3 + 1] = d.yOffset + Math.sin(Date.now() * 0.001 + i) * 2;
+            d.angle += d.speed * 0.01;
+            positions[i*3] = Math.cos(d.angle) * d.r;
+            positions[i*3+2] = Math.sin(d.angle) * d.r;
         }
-        geometry.attributes.position.needsUpdate = true;
-
-        // Rotate sun slightly
-        sun.rotation.y += 0.005;
+        particles.geometry.attributes.position.needsUpdate = true;
 
         renderer.render(scene, camera);
     }
-
     animate();
 
-    // Resize Handler
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
